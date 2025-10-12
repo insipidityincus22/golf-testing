@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .conversation_models import ConversationTurn
@@ -16,7 +16,7 @@ class UserSimulator:
     """AI-powered user simulator for realistic conversation testing"""
 
     def __init__(
-        self, config: Optional[ConversationConfig] = None, api_key: Optional[str] = None
+        self, config: ConversationConfig | None = None, api_key: str | None = None
     ):
         self.config = config or ConversationConfig()
         self.openai_client = OpenAIClientWrapper(
@@ -181,9 +181,9 @@ Respond with ONLY the JSON object, no additional text."""
             return UserSimulatorResponse(
                 response_type="error",
                 user_message=None,
-                reasoning=f"User simulator error: {str(e)}",
+                reasoning=f"User simulator error: {e!s}",
                 confidence=0.0,
-                completion_reason=f"Simulator system error: {str(e)}",
+                completion_reason=f"Simulator system error: {e!s}",
             )
 
     def should_conversation_continue(
