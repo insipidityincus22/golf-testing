@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -8,7 +8,7 @@ class BaseTestConfig(BaseModel):
     """Base configuration for individual tests"""
 
     test_id: str = Field(..., description="Unique identifier for the test")
-    metadata: Optional[dict[str, Any]] = Field(
+    metadata: dict[str, Any] | None = Field(
         default=None, description="Additional test metadata"
     )
 
@@ -18,8 +18,8 @@ class BaseTestSuite(BaseModel):
 
     suite_id: str = Field(..., description="Unique identifier for the test suite")
     name: str = Field(..., description="Human-readable name for the test suite")
-    description: Optional[str] = Field(default=None, description="Suite description")
-    suite_type: Optional[str] = Field(
+    description: str | None = Field(default=None, description="Suite description")
+    suite_type: str | None = Field(
         default=None,
         description="Type of test suite (security, compliance, conversational)",
     )
