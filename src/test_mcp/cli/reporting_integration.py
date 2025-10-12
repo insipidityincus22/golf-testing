@@ -1,5 +1,5 @@
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from ..models.reporting import IssueCategory, IssueReport
 from ..services.reporting_client import get_reporting_client
@@ -24,7 +24,7 @@ def create_error_report(
     title: str,
     description: str,
     category: IssueCategory = IssueCategory.BUG,
-    error_context: Optional[dict[str, Any]] = None,
+    error_context: dict[str, Any] | None = None,
 ) -> IssueReport:
     """Create issue report with full diagnostic context"""
     user_tracker = get_user_tracker()
