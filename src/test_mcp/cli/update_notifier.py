@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta
-from typing import Optional
 
 from ..config.config_manager import ConfigManager
 from ..shared.console_shared import get_console
@@ -42,7 +41,7 @@ class UpdateNotifier:
 
         return True
 
-    def _handle_check_result(self, result: Optional[dict]):
+    def _handle_check_result(self, result: dict | None):
         """Handle the result of version check"""
         if not result or not result.get("has_update"):
             return
@@ -65,7 +64,7 @@ class UpdateNotifier:
 
 
 # Global instance
-_update_notifier: Optional[UpdateNotifier] = None
+_update_notifier: UpdateNotifier | None = None
 
 
 def get_update_notifier() -> UpdateNotifier:
