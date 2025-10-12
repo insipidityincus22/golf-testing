@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -26,7 +26,7 @@ class ConversationTurn(BaseModel):
     message: str
     tool_calls: list[ToolCall] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=datetime.now)
-    duration_seconds: Optional[float] = None
+    duration_seconds: float | None = None
 
 
 class ConversationResult(BaseModel):
@@ -38,13 +38,13 @@ class ConversationResult(BaseModel):
 
     # Completion info
     status: ConversationStatus = ConversationStatus.ACTIVE
-    completion_reason: Optional[str] = None
+    completion_reason: str | None = None
     goal_achieved: bool = False
 
     # Timing
     start_time: datetime = Field(default_factory=datetime.now)
-    end_time: Optional[datetime] = None
-    total_duration_seconds: Optional[float] = None
+    end_time: datetime | None = None
+    total_duration_seconds: float | None = None
 
     # Statistics
     total_turns: int = 0
@@ -62,12 +62,12 @@ class UserSimulatorResponse(BaseModel):
     response_type: Literal[
         "continue", "complete_success", "complete_failure", "stuck", "error"
     ]
-    user_message: Optional[str] = None
+    user_message: str | None = None
     reasoning: str = Field(..., description="Why the simulator made this decision")
     confidence: float = Field(
         ..., ge=0.0, le=1.0, description="Confidence in the response"
     )
-    completion_reason: Optional[str] = None
+    completion_reason: str | None = None
 
 
 class ConversationConfig(BaseModel):
