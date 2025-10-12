@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Optional
+from typing import Any
 
 from openai import OpenAI
 
@@ -11,7 +11,7 @@ class OpenAIClientWrapper:
     Handles o3 model temperature restrictions and consistent JSON parsing.
     """
 
-    def __init__(self, model: str = "gpt-5-2025-08-07", api_key: Optional[str] = None):
+    def __init__(self, model: str = "gpt-5-2025-08-07", api_key: str | None = None):
         self.model = model
         self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
 
@@ -57,7 +57,7 @@ class OpenAIClientWrapper:
 
             return content
         except Exception as e:
-            raise Exception(f"OpenAI API call failed: {str(e)}") from e
+            raise Exception(f"OpenAI API call failed: {e!s}") from e
 
     def parse_json_response(self, raw_response: str) -> dict[str, Any]:
         """
@@ -87,7 +87,7 @@ class OpenAIClientWrapper:
         messages: list[dict[str, str]],
         max_tokens: int = 1000,
         temperature: float = 0.1,
-        fallback_data: Optional[dict[str, Any]] = None,
+        fallback_data: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str]:
         """
         Complete workflow: API call + JSON parsing with fallback handling.
@@ -117,7 +117,7 @@ class OpenAIClientWrapper:
                     raise e
 
         except Exception as e:
-            error_msg = f"OpenAI completion failed: {str(e)}"
+            error_msg = f"OpenAI completion failed: {e!s}"
             if fallback_data is not None:
                 return fallback_data, error_msg
             else:
