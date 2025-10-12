@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -21,18 +21,16 @@ class TestCase(BaseModel):
     test_id: str = Field(..., description="Unique test identifier")
     user_message: str = Field(..., description="User message for the test")
     success_criteria: str = Field(..., description="Criteria for test success")
-    max_turns: Optional[int] = Field(
-        default=10, description="Maximum conversation turns"
-    )
+    max_turns: int | None = Field(default=10, description="Maximum conversation turns")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Test metadata")
-    server_name: Optional[str] = Field(default=None, description="Target server name")
+    server_name: str | None = Field(default=None, description="Target server name")
     timeout_seconds: int = Field(default=120, description="Test timeout in seconds")
 
     @classmethod
     def from_config(
         cls,
         config,
-        server_name: Optional[str] = None,
+        server_name: str | None = None,
         default_test_type: str = "conversation",
     ) -> "TestCase":
         """Convert test config to TestCase with type-aware field mapping and test type detection"""
@@ -100,9 +98,9 @@ class ToolCall(BaseModel):
     tool_name: str
     server_name: str
     input_params: dict[str, Any]
-    result: Optional[dict[str, Any]] = None
-    error: Optional[str] = None
-    execution_time_ms: Optional[float] = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    execution_time_ms: float | None = None
 
 
 class TestExecution(BaseModel):
@@ -112,15 +110,15 @@ class TestExecution(BaseModel):
     test_case: TestCase
     status: TestStatus = TestStatus.QUEUED
     start_time: datetime = Field(default_factory=datetime.now)
-    end_time: Optional[datetime] = None
-    duration_seconds: Optional[float] = None
+    end_time: datetime | None = None
+    duration_seconds: float | None = None
 
     # Agent interaction
-    agent_response: Optional[str] = None
+    agent_response: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
 
     # Errors and issues
-    error_message: Optional[str] = None
+    error_message: str | None = None
     timeout_occurred: bool = False
 
     # Raw data for debugging
@@ -147,7 +145,7 @@ class TestRun(BaseModel):
     suite: TestSuite
     parallelism: int = Field(default=5)
     start_time: datetime = Field(default_factory=datetime.now)
-    end_time: Optional[datetime] = None
+    end_time: datetime | None = None
 
     # Results
     executions: list[TestExecution] = Field(default_factory=list)
