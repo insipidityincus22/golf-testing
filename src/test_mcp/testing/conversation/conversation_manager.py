@@ -1,13 +1,12 @@
+import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Optional, Union
 
 from ...agent.agent import ClaudeAgent
 from ...agent.config import load_agent_config
 from ...agent.models import AgentConfig
 from ..core.test_models import TestCase, ToolCall
-from ..utils.tool_extraction import extract_tool_calls_from_agent
 from .conversation_models import (
     ConversationConfig,
     ConversationResult,
@@ -22,8 +21,8 @@ class ConversationManager:
 
     def __init__(
         self,
-        config: Optional[Union[str, AgentConfig]] = None,
-        conversation_config: Optional[ConversationConfig] = None,
+        config: str | AgentConfig | None = None,
+        conversation_config: ConversationConfig | None = None,
     ):
         """
         Initialize ConversationManager.
@@ -34,6 +33,7 @@ class ConversationManager:
             conversation_config: Configuration for conversation behavior.
         """
         self.conversation_config = conversation_config or ConversationConfig()
+        self.logger = logging.getLogger(__name__)
         self.user_simulator = UserSimulator(self.conversation_config)
 
         # Handle different config types
@@ -52,8 +52,8 @@ class ConversationManager:
         conversation: ConversationResult,
         speaker: str,
         message: str,
-        tool_calls: Optional[list[ToolCall]] = None,
-        duration: Optional[float] = None,
+        tool_calls: list[ToolCall] | None = None,
+        duration: float | None = None,
     ) -> None:
         """Add a turn to the conversation"""
         turn = ConversationTurn(
@@ -78,7 +78,7 @@ class ConversationManager:
                 if tool_call.tool_name not in conversation.tools_used:
                     conversation.tools_used.append(tool_call.tool_name)
 
-    def run_conversation(self, test_case: TestCase) -> ConversationResult:
+    async def run_conversation(self, test_case: TestCase) -> ConversationResult:
         """Run a complete conversation for a test case"""
 
         # Initialize conversation
@@ -108,16 +108,24 @@ class ConversationManager:
                 turn_start_time = time.time()
 
                 try:
-                    agent_response = agent.send_message(current_user_message)
+                    agent_response = await agent.send_message(current_user_message)
                     turn_duration = time.time() - turn_start_time
 
-                    # Extract tool calls BEFORE clearing to avoid race condition
-                    tool_calls = extract_tool_calls_from_agent(agent, recent_only=True)
+                    # Get tool calls directly from agent's stored results (already in ToolCall format)
+                    from ..core.test_models import ToolCall
+
+                    tool_call_dicts = agent.get_recent_tool_results()
+                    tool_calls = [
+                        ToolCall(**call_dict) for call_dict in tool_call_dicts
+                    ]
 
                     # Add agent turn to conversation
                     self._add_conversation_turn(
                         conversation, "agent", agent_response, tool_calls, turn_duration
                     )
+
+                    # Store tool count before clearing results
+                    tool_count = len(tool_calls)
 
                     # Clear tool results from agent session after extracting them
                     agent.clear_tool_results()
@@ -126,7 +134,7 @@ class ConversationManager:
                     # Keep last 20 messages to maintain context while preventing unbounded growth
                     if agent.get_session_message_count() > 20:
                         agent.cleanup_session_messages(keep_last_n=20)
-                        print("   Cleaned up session messages (kept last 20)")
+                        self.logger.debug("Cleaned up session messages (kept last 20)")
 
                     # Also enforce maximum conversation length to prevent runaway conversations
                     if turn_number >= 50:  # Hard limit beyond config max_turns
@@ -134,16 +142,18 @@ class ConversationManager:
                         conversation.completion_reason = (
                             "Conversation exceeded safety limit (50 turns)"
                         )
-                        print("   STOPPED: Conversation exceeded safety limit")
+                        self.logger.warning(
+                            "STOPPED: Conversation exceeded safety limit"
+                        )
                         break
 
-                    print(
-                        f"   Agent responded ({turn_duration:.1f}s, {len(tool_calls)} tools)"
+                    self.logger.info(
+                        f"Agent responded ({turn_duration:.1f}s, {tool_count} tools)"
                     )
 
                 except Exception as e:
                     # Agent error
-                    error_message = f"Agent error: {str(e)}"
+                    error_message = f"Agent error: {e!s}"
                     self._add_conversation_turn(
                         conversation,
                         "agent",
@@ -164,10 +174,10 @@ class ConversationManager:
                         test_case, conversation.turns, agent_response
                     )
 
-                    print(
-                        f"   Simulator decision: {simulator_response.response_type} (confidence: {simulator_response.confidence:.2f})"
+                    self.logger.info(
+                        f"Simulator decision: {simulator_response.response_type} (confidence: {simulator_response.confidence:.2f})"
                     )
-                    print(f"   Reasoning: {simulator_response.reasoning}")
+                    self.logger.debug(f"Reasoning: {simulator_response.reasoning}")
 
                     # Check if conversation should continue
                     if not self.user_simulator.should_conversation_continue(
@@ -185,7 +195,9 @@ class ConversationManager:
                         conversation.goal_achieved = (
                             conversation.status == ConversationStatus.GOAL_ACHIEVED
                         )
-                        print(f"   Conversation complete: {conversation.status.value}")
+                        self.logger.info(
+                            f"Conversation complete: {conversation.status.value}"
+                        )
                         break
 
                     # Continue conversation with user simulator's response
@@ -193,16 +205,16 @@ class ConversationManager:
                         simulator_response.user_message
                         or "No message from user simulator"
                     )
-                    print(
-                        f"   User will respond: {current_user_message[:100]}{'...' if len(current_user_message) > 100 else ''}"
+                    self.logger.debug(
+                        f"User will respond: {current_user_message[:100]}{'...' if len(current_user_message) > 100 else ''}"
                     )
 
                 except Exception as e:
                     # User simulator error
-                    error_message = f"User simulator error: {str(e)}"
+                    error_message = f"User simulator error: {e!s}"
                     conversation.status = ConversationStatus.ERROR
                     conversation.completion_reason = error_message
-                    print(f"   ❌ {error_message}")
+                    self.logger.error(f"❌ {error_message}")
                     break
 
             else:
@@ -211,15 +223,15 @@ class ConversationManager:
                 conversation.completion_reason = (
                     f"Reached maximum turns ({self.conversation_config.max_turns})"
                 )
-                print(
-                    f"   TIMEOUT: Conversation timed out after {self.conversation_config.max_turns} turns"
+                self.logger.warning(
+                    f"TIMEOUT: Conversation timed out after {self.conversation_config.max_turns} turns"
                 )
 
         except Exception as e:
             # Unexpected error
             conversation.status = ConversationStatus.ERROR
-            conversation.completion_reason = f"Unexpected error: {str(e)}"
-            print(f"   ❌ Unexpected error: {e}")
+            conversation.completion_reason = f"Unexpected error: {e!s}"
+            self.logger.error(f"❌ Unexpected error: {e}")
 
         finally:
             # Finalize conversation
@@ -237,38 +249,45 @@ class ConversationManager:
                     for msg in agent.get_session_history()
                 ]
             except Exception as e:
-                print(f"   Warning: Could not store raw conversation data: {e}")
+                self.logger.warning(f"Could not store raw conversation data: {e}")
                 conversation.raw_conversation_data = []
 
-            # Clean up agent session to prevent memory leak
+            # Clean up agent session and MCP connections to prevent memory leak
             try:
                 agent.reset_session()
-                print("   Agent session cleaned up")
+                self.logger.debug("Agent session cleaned up")
             except Exception as e:
-                print(f"   Warning: Could not clean up agent session: {e}")
+                self.logger.warning(f"Could not clean up agent session: {e}")
 
-        print(f"   Conversation completed: {conversation.status.value}")
-        print(f"   Duration: {conversation.total_duration_seconds:.1f}s")
-        print(
-            f"   Turns: {conversation.total_turns} ({conversation.user_turns} user, {conversation.agent_turns} agent)"
+            # Important: Properly close MCP client connections
+            try:
+                await agent.cleanup()
+                self.logger.debug("Agent MCP connections cleaned up")
+            except Exception as e:
+                self.logger.warning(f"Could not clean up agent MCP connections: {e}")
+
+        self.logger.info(f"Conversation completed: {conversation.status.value}")
+        self.logger.info(f"Duration: {conversation.total_duration_seconds:.1f}s")
+        self.logger.info(
+            f"Turns: {conversation.total_turns} ({conversation.user_turns} user, {conversation.agent_turns} agent)"
         )
-        print(
-            f"   Tools used: {', '.join(conversation.tools_used) if conversation.tools_used else 'None'}"
+        self.logger.info(
+            f"Tools used: {', '.join(conversation.tools_used) if conversation.tools_used else 'None'}"
         )
 
         return conversation
 
-    def run_conversations_batch(
+    async def run_conversations_batch(
         self, test_cases: list[TestCase]
     ) -> list[ConversationResult]:
         """Run conversations for multiple test cases"""
         results = []
 
         for i, test_case in enumerate(test_cases, 1):
-            print(f"\nRunning conversation {i}/{len(test_cases)}")
+            self.logger.info(f"Running conversation {i}/{len(test_cases)}")
 
             try:
-                conversation_result = self.run_conversation(test_case)
+                conversation_result = await self.run_conversation(test_case)
                 results.append(conversation_result)
 
             except Exception as e:
@@ -277,10 +296,10 @@ class ConversationManager:
                     test_case=test_case,
                     conversation_id=str(uuid.uuid4()),
                     status=ConversationStatus.ERROR,
-                    completion_reason=f"Conversation manager error: {str(e)}",
+                    completion_reason=f"Conversation manager error: {e!s}",
                     end_time=datetime.now(),
                 )
                 results.append(error_conversation)
-                print(f"❌ Conversation failed: {e}")
+                self.logger.error(f"❌ Conversation failed: {e}")
 
         return results

@@ -1,7 +1,6 @@
 """Command suggestion system with fuzzy matching for MCP Testing CLI"""
 
 import difflib
-from typing import Optional
 
 from ..shared.console_shared import get_console
 
@@ -35,7 +34,7 @@ def find_closest_matches(
 
 def suggest_command_corrections(
     invalid_command: str, available_commands: list[str]
-) -> Optional[str]:
+) -> str | None:
     """Suggest corrections for invalid commands"""
     suggestions = find_closest_matches(
         invalid_command, available_commands, max_suggestions=3, cutoff=0.5

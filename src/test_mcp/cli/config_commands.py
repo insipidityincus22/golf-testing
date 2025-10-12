@@ -3,8 +3,6 @@
 Configuration management CLI commands: list, show, init (with completion setup)
 """
 
-from typing import Optional
-
 import click
 from rich.prompt import Confirm
 
@@ -14,7 +12,7 @@ from .completion import complete_config_types, complete_list_filters
 from .post_command_hooks import trigger_post_command_hooks
 
 
-def setup_shell_completion():
+def setup_shell_completion() -> None:
     """Setup shell completion as part of init workflow"""
     from ..shell_integration.setup_completion import (
         setup_completion,
@@ -34,16 +32,16 @@ def setup_shell_completion():
         # The setup_completion function handles its own messaging
         setup_completion()
     except Exception as e:
-        console.print_error(f"Shell completion setup failed: {str(e)}")
+        console.print_error(f"Shell completion setup failed: {e!s}")
 
 
-def create_list_command():
+def create_list_command() -> click.Command:
     """Create the list command"""
 
     @click.command(name="list")
     @click.argument("type_filter", required=False, shell_complete=complete_list_filters)
     @click.pass_context
-    def mcpt_list_complete(ctx, type_filter: Optional[str] = None):
+    def mcpt_list_complete(ctx, type_filter: str | None = None):
         """List available configurations by memorable ID
 
         Examples:
@@ -79,7 +77,7 @@ def create_list_command():
     return mcpt_list_complete
 
 
-def create_show_command():
+def create_show_command() -> click.Command:
     """Create the show command"""
 
     @click.command(name="show")
@@ -103,10 +101,10 @@ def create_show_command():
         try:
             if config_type == "server":
                 config = config_manager.get_server_by_id(config_id)
+                console.print_json(data=config)
             else:
                 config = config_manager.get_suite_by_id(config_id)
-
-            console.print_json(data=config)
+                console.print_json(data=config)
 
         except KeyError:
             console.print_error(

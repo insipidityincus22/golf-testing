@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -56,7 +56,7 @@ class OAuthTester:
     def __init__(
         self,
         server_config: dict[str, Any],
-        progress_tracker: Optional[ProgressTracker] = None,
+        progress_tracker: ProgressTracker | None = None,
     ):
         self.server_config = server_config
         server_url = server_config.get("url")
@@ -66,7 +66,7 @@ class OAuthTester:
         self.progress_tracker = progress_tracker
 
     async def run_oauth_tests(
-        self, categories: Optional[list[str]] = None
+        self, categories: list[str] | None = None
     ) -> list[AuthTestResult]:
         """Run OAuth and authentication tests"""
         results = []

@@ -1,5 +1,4 @@
 import asyncio
-from typing import Optional
 
 import click
 from rich.prompt import Confirm, Prompt
@@ -42,9 +41,9 @@ def create_issue_command():
     @click.option("--no-history", is_flag=True, help="Exclude recent command history")
     @click.option("--dry-run", is_flag=True, help="Show report data without submitting")
     def mcpt_report_issue(
-        category: Optional[str],
-        title: Optional[str],
-        description: Optional[str],
+        category: str | None,
+        title: str | None,
+        description: str | None,
         no_diagnostics: bool,
         no_history: bool,
         dry_run: bool,
@@ -148,7 +147,7 @@ def create_issue_command():
         except KeyboardInterrupt:
             console.print_info("\nReport cancelled by user.")
         except Exception as e:
-            console.print_error(f"Failed to create report: {str(e)}")
+            console.print_error(f"Failed to create report: {e!s}")
             command_tracker.record_command("mcp-t report issue", exit_code=1)
 
     return mcpt_report_issue
@@ -173,9 +172,9 @@ def _preview_report(report: IssueReport):
         )
 
     if report.include_command_history and report.command_history:
-        console.console.print(
-            f"[bold]Command History:[/bold] {len(report.command_history)} recent commands"
-        )
+        console.console.print("[bold]Command History:[/bold]")
+        for cmd in report.command_history[-10:]:
+            console.console.print(f"  • {cmd.command}")
 
     console.console.print(
         "\n[dim]Use --dry-run=false to actually submit this report.[/dim]"

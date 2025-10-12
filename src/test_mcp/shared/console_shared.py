@@ -1,7 +1,6 @@
 """Unified console system for consistent CLI output formatting"""
 
 from enum import Enum
-from typing import Optional
 
 from rich.console import Console
 from rich.panel import Panel
@@ -31,7 +30,7 @@ class MessageType(Enum):
 class MCPConsole:
     """Unified console with consistent Rich formatting patterns"""
 
-    def __init__(self, force_terminal: Optional[bool] = None):
+    def __init__(self, force_terminal: bool | None = None):
         """Initialize console with TTY detection"""
         self.console = Console(force_terminal=force_terminal)
         self._setup_styles()
@@ -70,9 +69,7 @@ class MCPConsole:
         """Print success message"""
         self.print_message(message, MessageType.SUCCESS)
 
-    def print_error(
-        self, message: str, suggestions: Optional[list[str]] = None
-    ) -> None:
+    def print_error(self, message: str, suggestions: list[str] | None = None) -> None:
         """Print error message with optional suggestions"""
         self.print_message(message, MessageType.ERROR)
         if suggestions:
@@ -150,7 +147,7 @@ class MCPConsole:
         """Standardized confirmation prompt"""
         return Confirm.ask(message, default=default, console=self.console)
 
-    def prompt(self, message: str, default: Optional[str] = None) -> str:
+    def prompt(self, message: str, default: str | None = None) -> str:
         """Standardized text prompt"""
         if default is not None:
             return Prompt.ask(message, default=default, console=self.console)
@@ -195,7 +192,7 @@ Latest version:  [green]{latest_version}[/green]
 
 
 # Global console instance
-_console_instance: Optional[MCPConsole] = None
+_console_instance: MCPConsole | None = None
 
 
 def get_console() -> MCPConsole:

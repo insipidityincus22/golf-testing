@@ -1,7 +1,6 @@
 import json
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from .. import __version__
 from ..config.config_manager import ConfigManager
@@ -12,14 +11,18 @@ class UserTracker:
 
     def __init__(self):
         self.config_manager = ConfigManager()
-        self.user_id_file = self.config_manager.get_config_path("user_id.json", "cache")
+        self.user_id_file = (
+            self.config_manager.paths.get_system_paths()["cache_dir"] / "user_id.json"
+        )
 
     def get_or_create_user_id(self) -> str:
         """Get existing or create new anonymous user ID"""
         if self.user_id_file.exists():
             try:
                 data = json.loads(self.user_id_file.read_text())
-                return data.get("user_id")
+                user_id = data.get("user_id")
+                if user_id:
+                    return user_id
             except Exception:
                 pass  # Create new ID if file corrupted
 
@@ -40,7 +43,7 @@ class UserTracker:
 
 
 # Global instance
-_user_tracker: Optional[UserTracker] = None
+_user_tracker: UserTracker | None = None
 
 
 def get_user_tracker() -> UserTracker:

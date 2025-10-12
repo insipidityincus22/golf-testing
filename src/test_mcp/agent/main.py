@@ -9,7 +9,7 @@ from .config import (
 )
 
 __all__ = [
+    "build_agent_config_from_server",
     "load_agent_config",
     "save_config_template",
-    "build_agent_config_from_server",
 ]

@@ -1,6 +1,6 @@
 import json
+import re
 from datetime import datetime
-from typing import Optional
 
 from ..config.config_manager import ConfigManager
 from ..models.reporting import CommandHistoryEntry
@@ -11,20 +11,42 @@ class CommandTracker:
 
     def __init__(self, max_history: int = 50):
         self.config_manager = ConfigManager()
-        self.history_file = self.config_manager.get_config_path(
-            "command_history.json", "cache"
+        self.history_file = (
+            self.config_manager.paths.get_system_paths()["cache_dir"]
+            / "command_history.json"
         )
         self.max_history = max_history
+
+    def _sanitize_command(self, command: str) -> str:
+        """Sanitize command for privacy before sending to cloud"""
+        # Remove full system paths and keep only the essential command structure
+        if not command:
+            return command
+
+        # Replace full paths to mcp-t executable with just "mcp-t"
+        command = re.sub(r".*?/mcp-t\b", "mcp-t", command)
+
+        # Replace any remaining absolute paths with relative markers
+        # This catches /Users/username/path -> ~/path patterns
+        command = re.sub(r"/Users/[^/\s]+", "~", command)
+
+        # Remove any other system paths that might contain sensitive info
+        command = re.sub(r"/[a-zA-Z0-9._-]+/[a-zA-Z0-9._/-]+/bin/", "", command)
+
+        return command.strip()
 
     def record_command(
         self,
         command: str,
-        exit_code: Optional[int] = None,
-        duration_ms: Optional[float] = None,
+        exit_code: int | None = None,
+        duration_ms: float | None = None,
     ):
         """Record a command execution"""
+        # Sanitize command for privacy before storing
+        sanitized_command = self._sanitize_command(command)
+
         entry = CommandHistoryEntry(
-            command=command,
+            command=sanitized_command,
             timestamp=datetime.now(),
             exit_code=exit_code,
             duration_ms=duration_ms,
@@ -61,7 +83,7 @@ class CommandTracker:
 
 
 # Global instance
-_command_tracker: Optional[CommandTracker] = None
+_command_tracker: CommandTracker | None = None
 
 
 def get_command_tracker() -> CommandTracker:

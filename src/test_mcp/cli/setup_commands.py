@@ -3,15 +3,11 @@
 Quickstart and demo CLI commands: quickstart group with demo subcommand
 """
 
-import json
-import warnings
-from pathlib import Path
-
 import click
 
 from ..shared.console_shared import get_console
+from ..shared.file_utils import ensure_directory, safe_json_dump
 from .post_command_hooks import trigger_post_command_hooks
-from .test_execution import run_tests_with_enhanced_progress
 from .utils import validate_api_keys
 
 
@@ -60,127 +56,6 @@ def create_quickstart_group():
     return mcpt_quickstart
 
 
-def run_quickstart_demo(console):
-    """Run the demo test with built-in configuration - extracted from old demo subcommand"""
-    warnings.filterwarnings("ignore")
-
-    console.print_header("MCP Testing Quick Demo")
-    console.console.print("=" * 50)
-
-    # Check API keys first
-    anthropic_key, openai_key = validate_api_keys()
-    if not anthropic_key:
-        console.print_error("Missing ANTHROPIC_API_KEY environment variable")
-        console.console.print("\n[bold]Set up your API key:[/bold]")
-        console.console.print("  [dim]export ANTHROPIC_API_KEY=your_key_here[/dim]")
-        console.console.print(
-            "  [dim]# Get your API key: https://console.anthropic.com/[/dim]"
-        )
-        console.console.print("\n[dim]Then run: mcp-t quickstart[/dim]")
-        return False
-
-    console.print_success("API keys ready!")
-    console.print_info("Running demo with Hacker News MCP server...")
-    console.console.print("   This will test real MCP functionality with AI agents")
-    console.console.print()
-
-    # Check that required example files exist
-    examples_dir = Path("examples")
-    suite_file = examples_dir / "suite.json"
-    server_file = examples_dir / "server.json"
-
-    if not suite_file.exists() or not server_file.exists():
-        missing_files = []
-        if not suite_file.exists():
-            missing_files.append(f"{suite_file} (test suite configuration)")
-        if not server_file.exists():
-            missing_files.append(f"{server_file} (server configuration)")
-
-        console.print_error(
-            "Missing required example files",
-            ["Creating configurations in next step will resolve this"],
-        )
-        console.console.print("\n[bold]Required files:[/bold]")
-        for file_desc in missing_files:
-            console.console.print(f"  • {file_desc}")
-
-        # Use built-in demo configurations instead
-        console.print_info("Using built-in demo configuration instead...")
-        return run_demo_with_builtin_config(console)
-
-    try:
-        console.print("Starting quickstart demo...")
-
-        # Load example configurations from files
-        with open(suite_file) as f:
-            demo_suite = json.load(f)
-        with open(server_file) as f:
-            demo_server = json.load(f)
-
-        run_tests_with_enhanced_progress(demo_suite, demo_server, verbose=False)
-
-        # If we get here, the run was successful
-        console.console.print()
-        results_content = """✅ Framework is working correctly
-💡 What just happened:
-  • Tested MCP server functionality
-  • Ran conversation tests with AI agents
-  • Used real MCP protocol communication
-  • Saved results to test_results/
-
-Next step: Create your own configurations"""
-
-        results_panel = console.create_results_panel(
-            "Quickstart Demo Complete", results_content, success=True
-        )
-        console.console.print(results_panel)
-        return True
-
-    except Exception as e:
-        console.print_error(
-            f"Demo failed: {str(e)}",
-            [
-                "This can happen if the demo server is unavailable",
-                "Don't worry - we'll set up your own configurations next",
-            ],
-        )
-        return False
-
-
-def run_demo_with_builtin_config(console):
-    """Run demo using built-in configurations when example files are missing"""
-    try:
-        console.print("Running demo with built-in configuration...")
-
-        # Use the built-in demo suite and server
-        demo_suite = get_built_in_demo_suite()
-        demo_server = get_built_in_demo_server()
-
-        run_tests_with_enhanced_progress(demo_suite, demo_server, verbose=False)
-
-        console.console.print()
-        results_content = """✅ Framework is working correctly
-💡 What just happened:
-  • Tested built-in demo configuration
-  • Validated MCP Testing framework
-  • Ready to create your own configurations
-
-Next step: Set up your server and test configurations"""
-
-        results_panel = console.create_results_panel(
-            "Demo Complete", results_content, success=True
-        )
-        console.console.print(results_panel)
-        return True
-
-    except Exception as e:
-        console.print_error(
-            f"Built-in demo failed: {str(e)}",
-            ["Framework may need configuration - let's set up your configs"],
-        )
-        return False
-
-
 def create_configuration_step(console):
     """Step 3: Offer to create persistent configuration"""
     from rich.prompt import Confirm
@@ -206,27 +81,83 @@ def create_configuration_step(console):
     # Ensure local directories exist
     paths = config_manager.paths.get_local_paths()
     for path in [paths["servers_dir"], paths["suites_dir"]]:
-        path.mkdir(parents=True, exist_ok=True)
+        ensure_directory(path)
 
     # Server setup with memorable ID
     server_id = Prompt.ask("Server ID (easy to remember)", default="my-server")
     server_name = Prompt.ask("Server name", default="My MCP Server")
-    server_url = Prompt.ask("Server URL")
 
-    # Create server config with ID
-    server_config = {
-        "name": server_name,
-        "type": "url",
-        "url": server_url,
-        "tool_configuration": {"enabled": True},
-    }
+    # Transport selection
+    console.console.print("\n[bold]Select transport type:[/bold]")
+    console.console.print("  1. HTTP  - Remote server via URL")
+    console.console.print("  2. stdio - Local server via command (subprocess)\n")
+
+    transport_choice = Prompt.ask("Transport type", choices=["1", "2"], default="1")
+
+    if transport_choice == "1":
+        # HTTP transport
+        server_url = Prompt.ask("Server URL")
+
+        # Optional authentication
+        from rich.prompt import Confirm
+
+        if Confirm.ask("Does this server require authentication?", default=False):
+            auth_token = Prompt.ask("Authorization token", password=True)
+        else:
+            auth_token = ""
+
+        # Create HTTP server config
+        server_config = {
+            "name": server_name,
+            "transport": "http",
+            "url": server_url,
+        }
+
+        if auth_token:
+            server_config["authorization_token"] = auth_token
+
+    else:
+        # stdio transport
+        console.console.print("\n[dim]Examples of stdio commands:[/dim]")
+        console.console.print("  npx -y @modelcontextprotocol/server-time")
+        console.console.print("  npx -y @modelcontextprotocol/server-fetch")
+        console.console.print("  uvx mcp-server-memory\n")
+
+        command = Prompt.ask("Command to run server")
+
+        # Create stdio server config
+        server_config = {
+            "name": server_name,
+            "transport": "stdio",
+            "command": command,
+        }
+
+        # Optional: Environment variables
+        if Confirm.ask("Add environment variables?", default=False):
+            console.console.print(
+                "[dim]Enter environment variables (leave blank to finish)[/dim]"
+            )
+            env_vars = {}
+            while True:
+                key = Prompt.ask("Variable name (or press Enter to finish)", default="")
+                if not key:
+                    break
+                value = Prompt.ask(f"Value for {key}")
+                env_vars[key] = value
+            if env_vars:
+                server_config["env"] = env_vars
+
+        # Optional: Working directory
+        if Confirm.ask("Set working directory?", default=False):
+            cwd = Prompt.ask("Working directory path", default=".")
+            if cwd and cwd != ".":
+                server_config["cwd"] = cwd
 
     # Save to local location
     local_paths = config_manager.paths.get_local_paths()
     server_file = local_paths["servers_dir"] / f"{server_id}.json"
 
-    with server_file.open("w") as f:
-        json.dump(server_config, f, indent=2)
+    safe_json_dump(server_config, server_file, "creating server configuration")
 
     console.print(f"✅ Server configuration saved: {server_file}")
     console.print(f"✅ Created server config: [cyan]{server_id}[/cyan]")
@@ -267,8 +198,7 @@ def create_configuration_step(console):
     # Save to local location
     suite_file = local_paths["suites_dir"] / f"{suite_id}.json"
 
-    with suite_file.open("w") as f:
-        json.dump(suite_config, f, indent=2)
+    safe_json_dump(suite_config, suite_file, "creating test suite configuration")
 
     console.print(f"✅ Suite configuration saved: {suite_file}")
     console.print(f"✅ Created test suite config: [cyan]{suite_id}[/cyan]")
@@ -321,7 +251,7 @@ def setup_completion_step(console):
             "Start a new shell or run 'source ~/.bashrc' (bash) / 'source ~/.zshrc' (zsh)"
         )
     except Exception as e:
-        console.print_error(f"Shell completion setup failed: {str(e)}")
+        console.print_error(f"Shell completion setup failed: {e!s}")
         console.console.print()
         console.console.print("[bold]Quickstart complete! 🎉[/bold]")
 
@@ -353,8 +283,8 @@ def show_quickstart_guide():
 
 [bold]Step 5: Explore More[/bold]
   [cyan]$ mcp-t list[/cyan]                  # See your configurations
-  [cyan]$ mcp-t compliance my-server[/cyan]  # Run compliance tests
-  [cyan]$ mcp-t security my-server[/cyan]    # Run security tests
+  [cyan]$ mcp-t run compliance-suite my-server[/cyan]  # Run compliance tests
+  [cyan]$ mcp-t run security-suite my-server[/cyan]    # Run security tests
 
 [bold]Pro Tips:[/bold]
 • Use Tab completion to see available configurations
@@ -401,7 +331,5 @@ def get_built_in_demo_server():
     # Use existing example server URL if available, otherwise use demo URL
     return {
         "name": "Demo MCP Server",
-        "type": "url",
         "url": "https://api.example.com/mcp",  # Demo URL - will fail gracefully
-        "tool_configuration": {"enabled": True},
     }

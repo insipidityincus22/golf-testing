@@ -3,7 +3,6 @@ import json
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 import httpx
 from packaging import version
@@ -48,7 +47,7 @@ class VersionChecker:
         thread.daemon = True
         thread.start()
 
-    def check_for_update(self) -> Optional[dict]:
+    def check_for_update(self) -> dict | None:
         """Check PyPI for newer version"""
         # Check cache first
         cached_result = self._load_cache()
@@ -85,7 +84,7 @@ class VersionChecker:
             # Return cached result on error, or None
             return cached_result
 
-    def _load_cache(self) -> Optional[dict]:
+    def _load_cache(self) -> dict | None:
         """Load cached version check result"""
         try:
             if self.cache_file.exists():

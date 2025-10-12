@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -7,22 +7,13 @@ from pydantic import BaseModel, Field
 from ..config.config_manager import MCPServerConfig
 
 
-class MCPToolConfiguration(BaseModel):
-    """Configuration for MCP server tools"""
-
-    enabled: bool = True
-    allowed_tools: Optional[list[str]] = None
-
-
 class ResultsUploadConfig(BaseModel):
     """Configuration for uploading results to backend service"""
 
     enabled: bool = False
     api_url: str = Field(..., description="Backend API endpoint for uploading results")
-    api_key: Optional[str] = Field(
-        None, description="API key for backend authentication"
-    )
-    server_id: Optional[str] = Field(
+    api_key: str | None = Field(None, description="API key for backend authentication")
+    server_id: str | None = Field(
         None, description="Server ID to associate with test results on the platform"
     )
     timeout_seconds: int = Field(default=30, description="Upload timeout")
@@ -34,8 +25,8 @@ class AgentConfig(BaseModel):
 
     anthropic_api_key: str
     mcp_servers: list[MCPServerConfig] = []
-    server_id: Optional[str] = None
-    results_upload: Optional[ResultsUploadConfig] = None
+    server_id: str | None = None
+    results_upload: ResultsUploadConfig | None = None
 
     # Fixed internal parameters (not user configurable)
     @property

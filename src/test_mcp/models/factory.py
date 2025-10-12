@@ -1,10 +1,8 @@
-from typing import Union
-
 from .compliance import ComplianceTestSuite
 from .conversational import ConversationTestSuite
 from .security import SecurityTestSuite
 
-TestSuiteType = Union[ComplianceTestSuite, SecurityTestSuite, ConversationTestSuite]
+TestSuiteType = ComplianceTestSuite | SecurityTestSuite | ConversationTestSuite
 
 # Simple factory without overload complexity
 SUITE_TYPES = {

@@ -1,5 +1,3 @@
-from typing import Optional
-
 from pydantic import Field
 
 from .base import BaseTestConfig, BaseTestSuite
@@ -10,9 +8,7 @@ class ConversationalTestConfig(BaseTestConfig):
 
     user_message: str = Field(..., description="Initial user message")
     success_criteria: str = Field(..., description="Natural language success criteria")
-    max_turns: Optional[int] = Field(
-        default=10, description="Maximum conversation turns"
-    )
+    max_turns: int | None = Field(default=10, description="Maximum conversation turns")
     context_persistence: bool = Field(
         default=True, description="Whether to maintain conversation context"
     )

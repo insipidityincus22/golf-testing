@@ -20,8 +20,8 @@ __all__ = [
     "BaseTestSuite",
     "ComplianceTestConfig",
     "ComplianceTestSuite",
+    "ConversationTestSuite",
+    "ConversationalTestConfig",
     "SecurityTestConfig",
     "SecurityTestSuite",
-    "ConversationalTestConfig",
-    "ConversationTestSuite",
 ]

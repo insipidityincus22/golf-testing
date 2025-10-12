@@ -12,3 +12,6 @@ configs/
 .claude/
 thoughts/
 test_results/
+docs/
+dist/
+venv

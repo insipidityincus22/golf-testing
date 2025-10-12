@@ -2,7 +2,7 @@ import platform
 import sys
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -40,8 +40,8 @@ class CommandHistoryEntry(BaseModel):
 
     command: str = Field(..., description="Command that was executed")
     timestamp: datetime = Field(..., description="When command was executed")
-    exit_code: Optional[int] = Field(default=None, description="Command exit code")
-    duration_ms: Optional[float] = Field(default=None, description="Command duration")
+    exit_code: int | None = Field(default=None, description="Command exit code")
+    duration_ms: float | None = Field(default=None, description="Command duration")
 
 
 class IssueReport(BaseModel):
@@ -62,13 +62,13 @@ class IssueReport(BaseModel):
     description: str = Field(..., description="Detailed issue description")
 
     # Context information
-    system_info: Optional[SystemInfo] = Field(
+    system_info: SystemInfo | None = Field(
         default_factory=SystemInfo, description="System diagnostic data"
     )
     command_history: list[CommandHistoryEntry] = Field(
         default_factory=list, description="Recent command history"
     )
-    error_context: Optional[dict[str, Any]] = Field(
+    error_context: dict[str, Any] | None = Field(
         default=None, description="Error context if available"
     )
 
@@ -85,12 +85,10 @@ class ReportSubmissionResult(BaseModel):
     """Result of report submission attempt"""
 
     success: bool = Field(..., description="Whether submission succeeded")
-    report_id: Optional[str] = Field(
-        default=None, description="Server-assigned report ID"
-    )
-    submitted_at: Optional[datetime] = Field(
+    report_id: str | None = Field(default=None, description="Server-assigned report ID")
+    submitted_at: datetime | None = Field(
         default=None, description="Actual submission timestamp"
     )
-    error_message: Optional[str] = Field(
+    error_message: str | None = Field(
         default=None, description="Error message if failed"
     )

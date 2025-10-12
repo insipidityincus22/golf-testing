@@ -118,7 +118,6 @@ The CLI automatically checks for updates and displays notifications after comman
 **Server Config (`server.json`)**:
 ```json
 {
-  "type": "url",
   "url": "https://your-mcp-server.com/mcp", 
   "name": "server_name"
 }

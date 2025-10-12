@@ -9,7 +9,7 @@ import sys
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 from rich.live import Live
@@ -17,6 +17,7 @@ from rich.table import Table
 
 from ..agent.config import build_agent_config_from_server
 from ..config.config_manager import ConfigManager, MCPServerConfig
+from ..mcp_client.client_manager import SharedTokenStorage
 from ..models.compliance import ComplianceTestSuite
 from ..models.conversational import ConversationTestSuite
 from ..models.factory import TestSuiteType
@@ -42,7 +43,7 @@ class TestRunConfiguration(BaseModel):
     parallelism: int = Field(
         default=1, description="Number of parallel test executions"
     )
-    timeout_seconds: Optional[int] = Field(
+    timeout_seconds: int | None = Field(
         default=None, description="Test timeout in seconds"
     )
     skip_judge: bool = Field(default=False, description="Skip LLM judge evaluation")
@@ -122,9 +123,9 @@ async def run_tests_parallel(
     return results
 
 
-def run_test_suite(
+async def run_test_suite(
     suite: TestSuiteType,
-    server_config: dict,
+    server_config: dict | MCPServerConfig,
     verbose: bool = False,
     use_global_dir: bool = False,
 ):
@@ -147,7 +148,7 @@ def run_test_suite(
         server_config = MCPServerConfig(**server_config)
 
     # Single execution path for all suite types
-    return execute_test_cases(
+    return await execute_test_cases(
         test_cases=test_cases,
         server_config=server_config,
         suite_config=suite,
@@ -156,7 +157,7 @@ def run_test_suite(
     )
 
 
-def execute_test_cases(
+async def execute_test_cases(
     test_cases: list,
     server_config: MCPServerConfig,
     suite_config: TestSuiteType,
@@ -209,7 +210,7 @@ def execute_test_cases(
 
             try:
                 # Execute test using the real engine router (from Phase 1)
-                result = run_single_test_case(test_case, server_config, verbose)
+                result = await run_single_test_case(test_case, server_config, verbose)
 
                 if result.get("success", False):
                     successful_tests += 1
@@ -351,6 +352,36 @@ def execute_test_cases(
             except Exception as e:
                 error_msg = str(e)
 
+                # Check for OAuth authentication failures - these should stop the test suite
+                if (
+                    "OAuth authentication failed" in error_msg
+                    or "unhandled errors in a TaskGroup" in error_msg
+                    or "TokenError" in error_msg
+                    or "invalid_token" in error_msg
+                ):
+                    friendly_msg = "OAuth authentication failed"
+                    friendly_error = f"OAuth authentication failed for server '{server_config.url}'. This affects all tests - stopping test suite execution."
+
+                    progress_tracker.update_simple_progress(
+                        test_id, friendly_msg, completed=True
+                    )
+                    results.append(
+                        {
+                            "test_id": test_case.test_id,
+                            "success": False,
+                            "message": friendly_error,
+                            "execution_time": 0.0,
+                            "error": str(e),
+                        }
+                    )
+
+                    # Stop processing remaining tests for OAuth failures
+                    console.print(
+                        "\n[red]❌ OAuth authentication failed - stopping test suite execution[/red]"
+                    )
+                    console.print(f"[dim]Error details: {error_msg}[/dim]")
+                    break
+
                 # Provide user-friendly error messages for common issues
                 if (
                     "Connection refused" in error_msg
@@ -372,7 +403,7 @@ def execute_test_cases(
                     friendly_error = "Authentication error: Please check your API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY)."
                 else:
                     friendly_msg = f"Error: {str(e)[:30]}"
-                    friendly_error = f"Test execution error: {str(e)}"
+                    friendly_error = f"Test execution error: {e!s}"
 
                 progress_tracker.update_simple_progress(
                     test_id, friendly_msg, completed=True
@@ -441,8 +472,6 @@ def execute_test_cases(
         timestamp=datetime.now(),
     )
 
-    # Save results to files
-    console.print("\nWriting results...")
     try:
         from .utils import write_test_results_with_location
 
@@ -459,10 +488,13 @@ def execute_test_cases(
 
     except Exception as e:
         console.print(
-            f"[yellow]Warning: Could not save results to file: {str(e)}[/yellow]"
+            f"[yellow]Warning: Could not save results to file: {e!s}[/yellow]"
         )
 
     # ========== END NEW LOGIC ==========
+
+    # Clean up shared OAuth token storage after test suite completes
+    SharedTokenStorage.clear_all()
 
     # Return final results (existing format preserved)
     return {
@@ -474,8 +506,11 @@ def execute_test_cases(
     }
 
 
-def run_single_test_case(
-    test_case: TestCase, server_config: MCPServerConfig, verbose: bool = False
+async def run_single_test_case(
+    test_case: TestCase,
+    server_config: MCPServerConfig,
+    verbose: bool = False,
+    suite_config=None,
 ) -> dict:
     """Execute a single test case using real test engines"""
     from ..shared.progress_tracker import ProgressTracker
@@ -497,11 +532,11 @@ def run_single_test_case(
 
         # Route to appropriate real test engine (existing pattern from enhanced progress)
         if test_type == "compliance":
-            result = execute_compliance_test_real(
+            result = await execute_compliance_test_real(
                 test_case, server_config.__dict__, progress_tracker, test_id, verbose
             )
         elif test_type == "security":
-            result = execute_security_test_real(
+            result = await execute_security_test_real(
                 test_case, server_config.__dict__, progress_tracker, test_id
             )
         elif test_type == "multi-provider":
@@ -510,8 +545,13 @@ def run_single_test_case(
             )
         else:
             # Default to conversation test (most common case)
-            result = execute_conversation_test_real(
-                test_case, server_config.__dict__, progress_tracker, test_id, verbose
+            result = await execute_conversation_test_real(
+                test_case,
+                server_config.__dict__,
+                progress_tracker,
+                test_id,
+                verbose,
+                suite_config,
             )
 
         # Mark completion
@@ -540,7 +580,7 @@ def run_single_test_case(
         return {
             "test_id": test_case.test_id,
             "success": False,
-            "message": f"Test execution failed: {str(e)}",
+            "message": f"Test execution failed: {e!s}",
             "execution_time": 0.0,
             "error": str(e),
         }
@@ -556,11 +596,13 @@ def run_tests_by_type(
     elif test_type == "security":
         # Convert dict to SecurityTestSuite
         security_suite = SecurityTestSuite(**suite_config)
-        return run_security_tests(security_suite, server_config, verbose)
+        return asyncio.run(run_security_tests(security_suite, server_config, verbose))
     elif test_type == "compliance":
         # Convert dict to ComplianceTestSuite
         compliance_suite = ComplianceTestSuite(**suite_config)
-        return run_compliance_tests(compliance_suite, server_config, verbose)
+        return asyncio.run(
+            run_compliance_tests(compliance_suite, server_config, verbose)
+        )
     elif test_type == "conversational":
         # Convert dict to ConversationTestSuite
         conversation_suite = ConversationTestSuite(**suite_config)
@@ -601,8 +643,8 @@ def run_multi_provider_tests(
             test_id = test_case.get("test_id", "unknown")
 
             # Run test across all configured providers
-            provider_results = run_test_across_providers(
-                test_case, provider_configs, verbose
+            provider_results = asyncio.run(
+                run_test_across_providers(test_case, provider_configs, verbose)
             )
             results.append({"test_id": test_id, "provider_results": provider_results})
 
@@ -615,7 +657,7 @@ def run_multi_provider_tests(
         return False
 
 
-def run_security_tests(
+async def run_security_tests(
     suite: SecurityTestSuite, server_config: dict, verbose: bool = False
 ):
     """Execute security tests using typed suite configuration"""
@@ -645,7 +687,7 @@ def run_security_tests(
         async def run_assessment():
             return await security_tester.run_security_assessment(security_tests)
 
-        report = asyncio.run(run_assessment())
+        report = await run_assessment()
 
         # Display security results
         console.print("\nSecurity Assessment Results")
@@ -679,11 +721,10 @@ def run_security_tests(
         return False
 
 
-def run_compliance_tests(
+async def run_compliance_tests(
     suite: ComplianceTestSuite, server_config: dict, verbose: bool = False
 ):
     """Execute compliance tests using typed suite configuration"""
-    import asyncio
 
     from ..shared.progress_tracker import ProgressTracker
     from ..testing.compliance.mcp_compliance_tester import MCPComplianceTester
@@ -762,7 +803,7 @@ def run_compliance_tests(
             return overall_success
 
         # Run the async compliance testing
-        return asyncio.run(run_compliance_testing())
+        return await run_compliance_testing()
 
     except Exception as e:
         console.print(f"[red]Compliance testing failed: {e}[/red]")
@@ -793,11 +834,15 @@ def run_conversational_tests(
         user_patience_level=suite.user_patience_level,
     )
 
-    return execute_standard_test_flow(
-        config.suite,
-        config.server_config.model_dump(),
-        verbose,
-        use_global_dir=use_global_dir,
+    import asyncio
+
+    return asyncio.run(
+        execute_standard_test_flow(
+            config.suite,
+            config.server_config.model_dump(),
+            verbose,
+            use_global_dir=use_global_dir,
+        )
     )
 
 
@@ -807,7 +852,9 @@ def run_basic_tests(suite_config: dict, server_config: dict, verbose: bool = Fal
     return True
 
 
-def get_multi_provider_config_from_env(providers: list[str]) -> dict[str, Any]:
+def get_multi_provider_config_from_env(
+    providers: list[str],
+) -> dict[str, dict[str, str]]:
     """Get provider configurations from environment variables"""
     provider_configs = {}
 
@@ -831,8 +878,10 @@ def get_multi_provider_config_from_env(providers: list[str]) -> dict[str, Any]:
     return provider_configs
 
 
-def run_test_across_providers(
-    test_case: dict[str, Any], provider_configs: dict[str, Any], verbose: bool
+async def run_test_across_providers(
+    test_case: dict[str, Any],
+    provider_configs: dict[str, dict[str, str]],
+    verbose: bool,
 ) -> dict[str, Any]:
     """Run single test across all configured providers"""
     results = {}
@@ -843,7 +892,7 @@ def run_test_across_providers(
             start_time = time.perf_counter()
 
             # Execute test with provider using provider interface
-            provider_response = execute_test_with_provider(
+            provider_response = await execute_test_with_provider(
                 provider_name, user_message, config
             )
 
@@ -865,8 +914,8 @@ def run_test_across_providers(
     return results
 
 
-def execute_test_with_provider(
-    provider_name: str, message: str, config: dict[str, Any]
+async def execute_test_with_provider(
+    provider_name: str, message: str, config: dict[str, str]
 ) -> str:
     """Execute test with specific provider using the provider interface"""
 
@@ -883,8 +932,8 @@ def execute_test_with_provider(
     else:
         raise ValueError(f"Unknown provider: {provider_name}")
 
-    # Execute message using provider interface - need async wrapper
-    response = asyncio.run(provider.send_message(message))
+    # Execute message using provider interface
+    response = await provider.send_message(message)
     return response
 
 
@@ -937,7 +986,6 @@ def create_provider_from_config(server_config) -> ProviderInterface:
             {
                 "url": server_config.url,
                 "name": server_config.name,
-                "tool_configuration": server_config.tool_configuration,
                 "authorization_token": server_config.authorization_token,
             }
         ],
@@ -1073,9 +1121,9 @@ def display_performance_summary(suite_metrics, verbose: bool):
         )
 
 
-def execute_standard_test_flow(
+async def execute_standard_test_flow(
     suite_config: dict,
-    server_config: dict,
+    server_config: dict | MCPServerConfig,
     verbose: bool = False,
     max_turns: int = 10,
     skip_judge: bool = False,
@@ -1096,8 +1144,12 @@ def execute_standard_test_flow(
     anthropic_key, openai_key = validate_api_keys()
     agent_config = build_agent_config_from_server(server_config, anthropic_key)
 
-    # Setup conversation configuration
-    conversation_config = ConversationConfig(max_turns=max_turns, timeout_seconds=300)
+    # Setup conversation configuration with suite parameters
+    conversation_config = ConversationConfig(
+        max_turns=max_turns,
+        timeout_seconds=300,
+        user_patience_level=getattr(suite_config, "user_patience_level", "medium"),
+    )
 
     # Initialize conversation manager
     ConversationManager(config=agent_config, conversation_config=conversation_config)
@@ -1126,14 +1178,12 @@ def execute_standard_test_flow(
     # Execute tests concurrently with resource management
     start_time = time.time()
     try:
-        test_results = asyncio.run(
-            run_tests_parallel(
-                suite_config,
-                provider,
-                max_parallelism=parallelism,
-                rate_limiter=rate_limiter,
-                suite_metrics=suite_metrics,
-            )
+        test_results = await run_tests_parallel(
+            suite_config,
+            provider,
+            max_parallelism=parallelism,
+            rate_limiter=rate_limiter,
+            suite_metrics=suite_metrics,
         )
 
         # Process results and handle any execution errors
@@ -1146,7 +1196,7 @@ def execute_standard_test_flow(
         console.print("Partial results may be available in test_results/ directory")
         return False
     except Exception as e:
-        console.print(f"Critical error during test execution: {str(e)}")
+        console.print(f"Critical error during test execution: {e!s}")
         if verbose:
             import traceback
 
@@ -1200,7 +1250,7 @@ def execute_standard_test_flow(
                     )
                     evaluations.append(eval_result.model_dump())
         except Exception as e:
-            console.print(f"    Judge evaluation failed: {str(e)}")
+            console.print(f"    Judge evaluation failed: {e!s}")
 
     # Generate summary
     summary = TestRunSummary(
@@ -1216,8 +1266,6 @@ def execute_standard_test_flow(
         timestamp=datetime.now(),
     )
 
-    # Write results to files
-    console.print("\nWriting results...")
     from .utils import write_test_results_with_location
 
     run_file, eval_file = write_test_results_with_location(
@@ -1253,22 +1301,22 @@ def run_with_mcpt_inference(
         # Use core test execution functions directly
         try:
             if test_type == "compliance":
-                success = run_compliance_tests(suite_config, server_config, verbose)
-            elif test_type == "health":
-                # For health checks, use the standard test execution with health-specific settings
-                success = execute_standard_test_flow(
-                    suite_config,
-                    server_config,
-                    verbose,
-                    max_turns=5,
-                    use_global_dir=use_global_dir,
+                success = asyncio.run(
+                    run_compliance_tests(suite_config, server_config, verbose)
                 )
             elif test_type == "security":
-                success = run_security_tests(suite_config, server_config, verbose)
+                success = asyncio.run(
+                    run_security_tests(suite_config, server_config, verbose)
+                )
             else:
                 # Default to standard test execution
-                success = execute_standard_test_flow(
-                    suite_config, server_config, verbose, use_global_dir=use_global_dir
+                success = asyncio.run(
+                    execute_standard_test_flow(
+                        suite_config,
+                        server_config,
+                        verbose,
+                        use_global_dir=use_global_dir,
+                    )
                 )
 
             if success:
@@ -1281,7 +1329,7 @@ def run_with_mcpt_inference(
                 sys.exit(1)
         except Exception as e:
             console.print(
-                f"[red]❌ {test_type.capitalize()} test execution failed: {str(e)}[/red]"
+                f"[red]❌ {test_type.capitalize()} test execution failed: {e!s}[/red]"
             )
             if verbose:
                 import traceback
@@ -1295,7 +1343,7 @@ def run_with_mcpt_inference(
         sys.exit(1)
 
 
-def run_tests_with_enhanced_progress(
+async def run_tests_with_enhanced_progress(
     suite_config, server_config, verbose: bool = False
 ) -> bool:
     """Run tests using real test execution engines with enhanced progress tracking"""
@@ -1330,11 +1378,11 @@ def run_tests_with_enhanced_progress(
             try:
                 # Use REAL test execution based on test type
                 if test_type == "compliance":
-                    result = execute_compliance_test_real(
+                    result = await execute_compliance_test_real(
                         test_case, server_config, progress_tracker, test_id
                     )
                 elif test_type == "security":
-                    result = execute_security_test_real(
+                    result = await execute_security_test_real(
                         test_case, server_config, progress_tracker, test_id
                     )
                 elif test_type == "multi-provider":
@@ -1343,8 +1391,13 @@ def run_tests_with_enhanced_progress(
                     )
                 else:
                     # Default conversation test using existing engine
-                    result = execute_conversation_test_real(
-                        test_case, server_config, progress_tracker, test_id
+                    result = await execute_conversation_test_real(
+                        test_case,
+                        server_config,
+                        progress_tracker,
+                        test_id,
+                        False,
+                        suite_config,
                     )
 
                 if result.get("success", False):
@@ -1388,12 +1441,13 @@ def run_tests_with_enhanced_progress(
     return success_count == len(test_cases)
 
 
-def execute_conversation_test_real(
+async def execute_conversation_test_real(
     test_case: dict,
     server_config: dict,
     progress_tracker,
     test_id: str,
     verbose: bool = False,
+    suite_config=None,
 ) -> dict:
     """Execute real conversation test with detailed progress tracking"""
     progress_tracker.update_simple_progress(test_id, "Building agent config...")
@@ -1411,8 +1465,16 @@ def execute_conversation_test_real(
         )
         agent_config = build_agent_config_from_server(server_model, anthropic_key)
 
-        # Setup conversation
-        conversation_config = ConversationConfig(max_turns=10, timeout_seconds=300)
+        # Setup conversation configuration with suite parameters
+        conversation_config = ConversationConfig(
+            max_turns=10,
+            timeout_seconds=300,
+            user_patience_level=(
+                getattr(suite_config, "user_patience_level", "medium")
+                if suite_config
+                else "medium"
+            ),
+        )
         conversation_manager = ConversationManager(
             config=agent_config, conversation_config=conversation_config
         )
@@ -1438,7 +1500,7 @@ def execute_conversation_test_real(
         )
 
         # Execute conversation using real engine
-        result = conversation_manager.run_conversation(test_case_model)
+        result = await conversation_manager.run_conversation(test_case_model)
 
         progress_tracker.update_simple_progress(test_id, "Evaluating results...")
 
@@ -1465,7 +1527,7 @@ def execute_conversation_test_real(
             "conversation_result": result,
         }
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         progress_tracker.update_simple_progress(
             test_id, "Connection timeout", completed=True
         )
@@ -1506,7 +1568,7 @@ def execute_conversation_test_real(
         }
 
 
-def execute_compliance_test_real(
+async def execute_compliance_test_real(
     test_case: dict,
     server_config: dict,
     progress_tracker,
@@ -1556,14 +1618,12 @@ def execute_compliance_test_real(
 
         # Execute compliance tests with filtering by categories
         if check_categories:
-            results = asyncio.run(
-                compliance_tester.run_compliance_tests(
-                    check_categories=check_categories
-                )
+            results = await compliance_tester.run_compliance_tests(
+                check_categories=check_categories
             )
         else:
             # Fallback to all tests if no categories specified
-            results = asyncio.run(compliance_tester.run_compliance_tests())
+            results = await compliance_tester.run_compliance_tests()
 
         # Filter results to only include the specific categories for this test
         if check_categories and results:
@@ -1597,7 +1657,7 @@ def execute_compliance_test_real(
                 "compliance_results": [],
             }
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         progress_tracker.update_simple_progress(
             test_id, "Connection timeout", completed=True
         )
@@ -1636,7 +1696,7 @@ def execute_compliance_test_real(
         }
 
 
-def execute_security_test_real(
+async def execute_security_test_real(
     test_case: dict, server_config: dict, progress_tracker, test_id: str
 ) -> dict:
     """Execute real security test using existing SecurityTester"""
@@ -1664,7 +1724,7 @@ def execute_security_test_real(
         )
 
         # Execute security assessment (this method actually exists)
-        results = asyncio.run(security_tester.run_security_assessment())
+        results = await security_tester.run_security_assessment()
 
         if results:
             return {
@@ -1681,7 +1741,7 @@ def execute_security_test_real(
                 "security_result": None,
             }
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         progress_tracker.update_simple_progress(
             test_id, "Connection timeout", completed=True
         )
@@ -1746,8 +1806,8 @@ def execute_multi_provider_test_real(
         }
 
         # Execute across all providers using existing function
-        provider_results = run_test_across_providers(
-            test_case_dict, provider_configs, verbose=False
+        provider_results = asyncio.run(
+            run_test_across_providers(test_case_dict, provider_configs, verbose=False)
         )
 
         # Determine overall success
@@ -1770,7 +1830,7 @@ def execute_multi_provider_test_real(
     except Exception as e:
         return {
             "success": False,
-            "error": f"Multi-provider test failed: {str(e)}",
+            "error": f"Multi-provider test failed: {e!s}",
             "response_time": 0.0,
         }
 

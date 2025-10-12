@@ -1,5 +1,3 @@
-from typing import Optional
-
 from ...shared.result_models import JudgeEvaluation
 from ..utils.openai_client import OpenAIClientWrapper
 from .conversation_models import ConversationResult
@@ -8,7 +6,7 @@ from .conversation_models import ConversationResult
 class ConversationJudge:
     """Enhanced judge for evaluating complete multi-turn conversations"""
 
-    def __init__(self, model: str = "gpt-5-2025-08-07", api_key: Optional[str] = None):
+    def __init__(self, model: str = "gpt-5-2025-08-07", api_key: str | None = None):
         self.openai_client = OpenAIClientWrapper(model=model, api_key=api_key)
 
     def _create_conversation_evaluation_prompt(
@@ -205,7 +203,7 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
                     "conversation_flow": 0.0,
                     "confidence": 0.0,
                 },
-                reasoning=f"Unable to evaluate conversation due to system error: {str(e)}",
+                reasoning=f"Unable to evaluate conversation due to system error: {e!s}",
                 success=False,
             )
 

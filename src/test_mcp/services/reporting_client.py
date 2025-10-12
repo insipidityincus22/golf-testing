@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Optional
 
 import httpx
 
@@ -19,9 +18,7 @@ class ReportingServiceClient:
         self.timeout = timeout
         self.console = get_console()
 
-    async def submit_report(
-        self, report: IssueReport
-    ) -> Optional[ReportSubmissionResult]:
+    async def submit_report(self, report: IssueReport) -> ReportSubmissionResult | None:
         """Submit issue report to service"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -57,9 +54,7 @@ class ReportingServiceClient:
             # Silent failure - don't interrupt CLI workflow
             return ReportSubmissionResult(success=False, error_message=str(e)[:200])
 
-    def submit_report_sync(
-        self, report: IssueReport
-    ) -> Optional[ReportSubmissionResult]:
+    def submit_report_sync(self, report: IssueReport) -> ReportSubmissionResult | None:
         """Synchronous wrapper for submit_report"""
         import asyncio
 
@@ -73,7 +68,7 @@ class ReportingServiceClient:
 
 
 # Global instance
-_reporting_client: Optional[ReportingServiceClient] = None
+_reporting_client: ReportingServiceClient | None = None
 
 
 def get_reporting_client() -> ReportingServiceClient:

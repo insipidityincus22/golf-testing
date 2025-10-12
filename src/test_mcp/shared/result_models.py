@@ -1,7 +1,7 @@
 from abc import ABC
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -54,10 +54,10 @@ class BaseTestResult(BaseModel, ABC):
     duration: float = Field(..., description="Total execution time in seconds")
 
     # Error handling
-    error_message: Optional[str] = Field(
+    error_message: str | None = Field(
         default=None, description="Error message if test failed"
     )
-    error_type: Optional[ErrorType] = Field(
+    error_type: ErrorType | None = Field(
         default=None, description="Type of error that occurred"
     )
 
@@ -110,7 +110,7 @@ class ConversationTestResult(BaseTestResult):
     )
 
     # Judge evaluation (structured model instead of dict)
-    judge_evaluation: Optional[JudgeEvaluation] = Field(
+    judge_evaluation: JudgeEvaluation | None = Field(
         default=None, description="LLM judge evaluation"
     )
 

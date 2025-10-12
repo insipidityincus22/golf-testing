@@ -1,10 +1,12 @@
 import json
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 import anthropic
 
+from ..mcp_client.capability_router import MCPCapabilityRouter
+from ..mcp_client.client_manager import MCPClientManager
 from .models import (
     AgentConfig,
     ChatMessage,
@@ -18,7 +20,39 @@ class ClaudeAgent:
     def __init__(self, config: AgentConfig):
         self.config = config
         self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
-        self.current_session: Optional[ChatSession] = None
+        self.current_session: ChatSession | None = None
+
+        # Initialize MCP client manager
+        self.mcp_client = MCPClientManager()
+        self.capability_router = MCPCapabilityRouter(self.mcp_client)
+        self.server_ids: list[str] = []
+        self.mcp_tools: list[dict[str, Any]] = []
+        self.mcp_resources: list[dict[str, Any]] = []
+        self.mcp_prompts: list[dict[str, Any]] = []
+
+    async def initialize(self):
+        """Connect to MCP servers"""
+        if not self.config.mcp_servers:
+            return
+
+        # Connect to each MCP server
+        for server_config in self.config.mcp_servers:
+            try:
+                server_dict = server_config.model_dump()
+                server_id = await self.mcp_client.connect_server(server_dict)
+                self.server_ids.append(server_id)
+            except Exception as e:
+                print(f"Failed to connect to server {server_config.name}: {e}")
+
+        # Get all capabilities from connected servers
+        if self.server_ids:
+            self.mcp_tools = await self.mcp_client.get_tools_for_llm(self.server_ids)
+            self.mcp_resources = await self.mcp_client.get_resources_for_llm(
+                self.server_ids
+            )
+            self.mcp_prompts = await self.mcp_client.get_prompts_for_llm(
+                self.server_ids
+            )
 
     def start_new_session(self) -> ChatSession:
         """Start a new chat session"""
@@ -35,36 +69,6 @@ class ClaudeAgent:
 
         message = ChatMessage(role=role, content=content)
         self.current_session.messages.append(message)
-
-    def _prepare_mcp_servers_config(self) -> list[dict[str, Any]]:
-        """Prepare MCP servers configuration for API call"""
-        mcp_servers = []
-
-        for server in self.config.mcp_servers:
-            server_config: dict[str, Any] = {
-                "type": "url",  # Anthropic API only accepts 'url' type
-                "url": str(server.url),
-                "name": server.name,
-            }
-
-            # Pass through tool_configuration as-is if it exists
-            # It's already a dict from the backend, so just pass it through
-            if server.tool_configuration is not None:
-                if isinstance(server.tool_configuration, dict):
-                    # Already a dict, use as-is
-                    server_config["tool_configuration"] = server.tool_configuration
-                else:
-                    # It's an MCPToolConfiguration object, convert to dict
-                    server_config["tool_configuration"] = (
-                        server.tool_configuration.model_dump()
-                    )
-
-            if server.authorization_token:
-                server_config["authorization_token"] = server.authorization_token
-
-            mcp_servers.append(server_config)
-
-        return mcp_servers
 
     def _prepare_messages(self) -> list[dict[str, str]]:
         """Prepare messages for API call"""
@@ -119,55 +123,25 @@ class ClaudeAgent:
             tuple: (clean_message, tool_results)
         """
         claude_content = []
-        tool_results = []
+        tool_results: list[dict[str, Any]] = []
 
         for block in content:
             # Use attribute access for BetaTextBlock and structured MCP types
             if block.type == "text":
                 claude_content.append(block.text)
-            elif block.type == "mcp_tool_use":
-                # Use structured MCP tool use block attributes directly
-                claude_content.append(f"\nUsing {block.name} tool...")
-            elif block.type == "mcp_tool_result":
-                # Use structured MCP tool result block attributes directly
-                if block.is_error:
-                    tool_results.append(
-                        {"is_error": True, "content": "Tool execution failed"}
-                    )
-                else:
-                    # Process structured content array
-                    for result_content in block.content:
-                        if result_content.type == "text":
-                            try:
-                                # Try to parse as JSON for structured data
-                                parsed_result = json.loads(result_content.text)
-                                tool_results.append(
-                                    {"is_error": False, "content": parsed_result}
-                                )
-                            except json.JSONDecodeError:
-                                # If not JSON, store as text
-                                tool_results.append(
-                                    {
-                                        "is_error": False,
-                                        "content": {"text": result_content.text},
-                                    }
-                                )
 
         # Return clean message without embedded tool results
         clean_message = "".join(claude_content)
 
         return clean_message, tool_results
 
-    def _prepare_api_call(
-        self, user_message: str
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    def _prepare_api_call(self, user_message: str) -> dict[str, Any]:
         """Extract common API preparation logic for both send and stream methods"""
         # Add user message to session
         self.add_message("user", user_message)
 
         # Prepare API call parameters
         messages = self._prepare_messages()
-        mcp_servers = self._prepare_mcp_servers_config()
 
         # Prepare API call
         api_params = {
@@ -178,11 +152,11 @@ class ClaudeAgent:
             "messages": messages,
         }
 
-        return api_params, mcp_servers
+        return api_params
 
     def _handle_api_error(self, error: Exception) -> str:
         """Common error handling for API calls"""
-        error_message = f"Error communicating with Claude: {str(error)}"
+        error_message = f"Error communicating with Claude: {error!s}"
         self.add_message("assistant", error_message)
         return error_message
 
@@ -207,19 +181,15 @@ class ClaudeAgent:
 
         return any(retryable in error_str for retryable in retryable_errors)
 
-    def _make_api_call_with_retry(self, api_params: dict, mcp_servers: list) -> Any:
+    def _make_api_call_with_retry(self, api_params: dict) -> Any:
         """Make API call with retry logic for transient errors"""
         max_retries = 3
         base_delay = 1.0  # Start with 1 second
 
         for attempt in range(max_retries + 1):
             try:
-                # Make API call using beta client for MCP support
-                response = self.client.beta.messages.create(
-                    **api_params,
-                    mcp_servers=mcp_servers,
-                    betas=["mcp-client-2025-04-04"],
-                )
+                # Make API call using regular client (no beta, no MCP servers)
+                response = self.client.messages.create(**api_params)
                 return response
 
             except Exception as e:
@@ -235,7 +205,7 @@ class ClaudeAgent:
                 delay = base_delay * (2**attempt) + (time.time() % 1)  # Add jitter
 
                 print(
-                    f"   Warning: API error (attempt {attempt + 1}/{max_retries + 1}): {str(e)}"
+                    f"   Warning: API error (attempt {attempt + 1}/{max_retries + 1}): {e!s}"
                 )
                 print(f"   Retrying in {delay:.1f}s...")
 
@@ -244,30 +214,285 @@ class ClaudeAgent:
         # This shouldn't be reached, but just in case
         raise Exception("Max retries exceeded")
 
-    def send_message(self, user_message: str) -> str:
-        """Send a message and get response from Claude"""
-        try:
-            api_params, mcp_servers = self._prepare_api_call(user_message)
+    async def send_message(self, user_message: str) -> str:
+        """Send message with MCP tool support via separate client"""
 
-            # Make API call with retry logic
-            response = self._make_api_call_with_retry(api_params, mcp_servers)
+        # Initialize if needed
+        if not self.server_ids and self.config.mcp_servers:
+            await self.initialize()
 
-            # Process response
-            assistant_message, tool_results = self._process_response_content(
-                response.content
+        # Prepare API parameters WITHOUT mcp_servers
+        api_params = self._prepare_api_call(user_message)
+
+        # Add tools if available
+        if self.mcp_tools:
+            # Convert MCP tools to Anthropic format
+            anthropic_tools = self.capability_router.format_tools_for_anthropic(
+                self.mcp_tools
             )
+            api_params["tools"] = anthropic_tools
 
-            # Store tool results separately in session
-            if tool_results and self.current_session:
-                self.current_session.tool_results.extend(tool_results)
+        # Add resources and prompts to system message if available
+        if self.mcp_resources or self.mcp_prompts:
+            capabilities_info = []
+            if self.mcp_resources:
+                resource_list = ", ".join(
+                    [str(r.get("uri", "")) for r in self.mcp_resources]
+                )
+                capabilities_info.append(f"Available MCP resources: {resource_list}")
+            if self.mcp_prompts:
+                prompt_list = ", ".join([str(p["name"]) for p in self.mcp_prompts])
+                capabilities_info.append(f"Available MCP prompts: {prompt_list}")
 
-            # Add assistant response to session
-            self.add_message("assistant", assistant_message)
+            # Enhance system prompt with available capabilities
+            if capabilities_info:
+                enhanced_system = (
+                    api_params.get("system", "") + "\n\n" + "\n".join(capabilities_info)
+                )
+                api_params["system"] = enhanced_system
 
-            return assistant_message
+        try:
+            # Call Anthropic API (regular call, no beta, no mcp_servers)
+            response = self._make_api_call_with_retry(api_params)
+
+            # Extract text response
+            assistant_text = self._extract_text_from_response(response)
+            full_response = assistant_text
+
+            # Check for tool calls in response
+            tool_calls = self.capability_router.parse_anthropic_tool_calls(response)
+
+            if tool_calls:
+                # Execute tools via MCP client
+                tool_results = await self.capability_router.execute_tool_calls(
+                    tool_calls, self.mcp_tools
+                )
+
+                # Create ToolCall objects directly from our execution
+                from ..testing.core.test_models import ToolCall
+
+                server_name = (
+                    self.config.mcp_servers[0].name
+                    if self.config.mcp_servers
+                    else "unknown"
+                )
+
+                tool_call_objects = []
+                for _i, (original_call, result) in enumerate(
+                    zip(tool_calls, tool_results, strict=False)
+                ):
+                    tool_call_obj = ToolCall(
+                        tool_name=original_call["tool_name"],
+                        server_name=server_name,
+                        input_params=original_call.get("arguments", {}),
+                        result=(
+                            self._extract_tool_result_content(result)
+                            if result.get("success")
+                            else None
+                        ),
+                        error=(
+                            result.get("error") if not result.get("success") else None
+                        ),
+                    )
+                    tool_call_objects.append(tool_call_obj)
+
+                # Store the ToolCall objects directly
+                if self.current_session:
+                    # Convert to dict format for storage
+                    tool_dicts = [obj.model_dump() for obj in tool_call_objects]
+                    self.current_session.tool_results.extend(tool_dicts)
+
+                # Create tool_result messages and continue conversation with Claude
+
+                # Create tool_result content for each tool call
+                tool_result_content = []
+                for original_call, result in zip(
+                    tool_calls, tool_results, strict=False
+                ):
+                    tool_use_id = original_call.get("call_id")  # Get the tool call ID
+                    if result.get("success"):
+                        # Extract the actual result content using the extraction method
+                        result_content = self._extract_tool_result_content(result)
+                        if (
+                            isinstance(result_content, dict)
+                            and "text" in result_content
+                        ):
+                            content = result_content["text"]
+                        else:
+                            content = str(result_content)
+
+                        tool_result_content.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": content,
+                            }
+                        )
+                    else:
+                        # Handle tool errors
+                        error_content = result.get("error", "Tool execution failed")
+                        tool_result_content.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": f"Error: {error_content}",
+                                "is_error": True,
+                            }
+                        )
+
+                if tool_result_content:
+                    # Continue conversation with Claude using tool results
+
+                    # Create continued conversation messages
+                    continued_messages = self._prepare_messages()
+                    continued_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": response.content,  # The original response with tool calls
+                        }
+                    )
+                    continued_messages.append(
+                        {"role": "user", "content": tool_result_content}
+                    )
+
+                    # Make follow-up API call for Claude to process tool results
+                    continued_api_params = {
+                        "model": self.config.model,
+                        "max_tokens": self.config.max_tokens,
+                        "messages": continued_messages,
+                        "tools": (
+                            self.capability_router.format_tools_for_anthropic(
+                                self.mcp_tools
+                            )
+                            if self.mcp_tools
+                            else None
+                        ),
+                    }
+
+                    continued_response = self._make_api_call_with_retry(
+                        continued_api_params
+                    )
+
+                    # Use the continued response as our final response
+                    full_response = self._extract_text_from_response(continued_response)
+                else:
+                    pass
+
+            # Parse for resource/prompt requests in final response
+            resource_requests = self._parse_resource_requests(full_response)
+            if resource_requests:
+                resource_results = await self.capability_router.execute_resource_reads(
+                    resource_requests, self.mcp_resources
+                )
+                formatted_resources = self.capability_router.format_results_for_llm(
+                    resource_results, "resource", "anthropic"
+                )
+                full_response += f"\n\n{formatted_resources}"
+
+            prompt_requests = self._parse_prompt_requests(full_response)
+            if prompt_requests:
+                prompt_results = await self.capability_router.execute_prompt_gets(
+                    prompt_requests, self.mcp_prompts
+                )
+                formatted_prompts = self.capability_router.format_results_for_llm(
+                    prompt_results, "prompt", "anthropic"
+                )
+                full_response += f"\n\n{formatted_prompts}"
+
+            # Add to session
+            self.add_message("assistant", full_response)
+
+            return full_response
 
         except Exception as e:
             return self._handle_api_error(e)
+
+    def _extract_text_from_response(self, response) -> str:
+        """Extract text content from Anthropic response"""
+        text_parts = []
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+        return "".join(text_parts)
+
+    def _extract_tool_result_content(
+        self, result: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Extract and format tool result content as a dictionary"""
+        if not result or not result.get("content"):
+            return None
+
+        content = result["content"]
+
+        # Handle list format content (MCP SDK format)
+        if isinstance(content, list):
+            # Extract text from content blocks
+            text_parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_parts.append(item.get("text", ""))
+
+            if text_parts:
+                return {"text": "\n".join(text_parts)}
+            else:
+                # Return structured content as-is if no text found
+                return {"content": content}
+
+        # Handle other formats
+        return {"content": content}
+
+    def _parse_resource_requests(self, text: str) -> list[dict[str, Any]]:
+        """Parse resource read requests from assistant text"""
+        resource_requests = []
+        # Example pattern: "[[read:resource_uri]]"
+        import re
+
+        pattern = r"\[\[read:(.*?)\]\]"
+        matches = re.findall(pattern, text)
+        for uri in matches:
+            resource_requests.append({"uri": uri})
+        return resource_requests
+
+    def _parse_prompt_requests(self, text: str) -> list[dict[str, Any]]:
+        """Parse prompt get requests from assistant text"""
+        prompt_requests = []
+        # Example pattern: "[[prompt:prompt_name|args]]"
+        import re
+
+        pattern = r"\[\[prompt:(.*?)(?:\|(.*?))?\]\]"
+        matches = re.findall(pattern, text)
+        for name, args_str in matches:
+            request = {"name": name}
+            if args_str:
+                try:
+                    import json
+
+                    request["arguments"] = json.loads(args_str)
+                except json.JSONDecodeError:
+                    pass
+            prompt_requests.append(request)
+        return prompt_requests
+
+    async def cleanup(self):
+        """Clean up MCP connections in task-safe manner"""
+        try:
+            # Try graceful cleanup first
+            await self.mcp_client.disconnect_all()
+        except RuntimeError as e:
+            if "cancel scope" in str(e) or "different task" in str(e):
+                # Handle AnyIO task context mismatch - use forced cleanup
+                self._force_cleanup_connections()
+            else:
+                raise
+
+    def _force_cleanup_connections(self):
+        """Force cleanup without awaiting AsyncExitStack.aclose()"""
+        # Use the client manager's force cleanup method
+        self.mcp_client.force_disconnect_all()
+        self.server_ids.clear()
+        self.mcp_tools.clear()
+        self.mcp_resources.clear()
+        self.mcp_prompts.clear()
 
     def get_session_history(self) -> list[ChatMessage]:
         """Get current session message history"""
@@ -285,6 +510,9 @@ class ClaudeAgent:
         """Clear stored tool results from the current session"""
         if self.current_session:
             self.current_session.tool_results = []
+            # Also clear stored tool calls
+            if hasattr(self.current_session, "tool_calls"):
+                self.current_session.tool_calls = []
 
     def cleanup_session_messages(self, keep_last_n: int = 10) -> None:
         """
@@ -304,28 +532,3 @@ class ClaudeAgent:
     def get_session_message_count(self) -> int:
         """Get the current number of messages in the session"""
         return len(self.current_session.messages) if self.current_session else 0
-
-    def get_available_mcp_tools(self) -> dict[str, list[str]]:
-        """Get information about available MCP tools"""
-        # This would typically query the MCP servers for available tools
-        # For now, return configured server information
-        tools_info = {}
-        for server in self.config.mcp_servers:
-            # Handle both dict and MCPToolConfiguration object
-            if server.tool_configuration:
-                if isinstance(server.tool_configuration, dict):
-                    # Extract allowed_tools from dict if present
-                    allowed_tools = server.tool_configuration.get("allowed_tools")
-                    tools_info[server.name] = (
-                        allowed_tools if allowed_tools else ["All tools available"]
-                    )
-                else:
-                    # It's an MCPToolConfiguration object
-                    tools_info[server.name] = (
-                        server.tool_configuration.allowed_tools
-                        if server.tool_configuration.allowed_tools
-                        else ["All tools available"]
-                    )
-            else:
-                tools_info[server.name] = ["All tools available"]
-        return tools_info

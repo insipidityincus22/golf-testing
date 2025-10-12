@@ -9,4 +9,4 @@ Supports both single-response testing and multi-turn conversation testing.
 from . import conversation, core
 
 __version__ = "0.2.0"
-__all__ = ["core", "conversation"]
+__all__ = ["conversation", "core"]
