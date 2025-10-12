@@ -3,8 +3,7 @@
 Create CLI commands: server, suite, and test-case creation with template selection
 """
 
-import json
-from typing import Optional
+from typing import Any
 
 import click
 from rich.prompt import Confirm, IntPrompt, Prompt
@@ -12,11 +11,12 @@ from rich.table import Table
 
 from ..config.config_manager import ConfigManager, ConfigTemplate
 from ..models.conversational import ConversationalTestConfig
-from ..shared.console_shared import get_console
+from ..shared.console_shared import MCPConsole, get_console
+from ..shared.file_utils import ensure_directory, safe_json_dump
 from .post_command_hooks import trigger_post_command_hooks
 
 
-def create_create_group():
+def create_create_group() -> click.Group:
     """Create the create command group"""
 
     @click.group(name="create")
@@ -31,15 +31,12 @@ def create_create_group():
     # Add subcommands
     mcpt_create.add_command(create_server_command())
     mcpt_create.add_command(create_suite_command())
-    mcpt_create.add_command(create_compliance_command())
-    mcpt_create.add_command(create_security_command())
-    mcpt_create.add_command(create_conversational_command())
     mcpt_create.add_command(create_test_case_command())
 
     return mcpt_create
 
 
-def create_server_command():
+def create_server_command() -> click.Command:
     """Create the server subcommand"""
 
     @click.command(name="server")
@@ -51,7 +48,7 @@ def create_server_command():
     )
     @click.option("--id", "server_id", help="Server ID (if not provided, will prompt)")
     @click.pass_context
-    def mcpt_create_server(ctx, use_global: bool, server_id: Optional[str]):
+    def mcpt_create_server(ctx, use_global: bool, server_id: str | None):
         """Create server configuration
 
         Interactive wizard to create a new MCP server configuration
@@ -72,36 +69,129 @@ def create_server_command():
             console.print("📍 Saving configuration globally (system-wide)\n")
             paths = config_manager.paths.get_system_paths()
             for path in [paths["servers_dir"]]:
-                path.mkdir(parents=True, exist_ok=True)
+                ensure_directory(path)
         else:
             console.print("📍 Saving configuration locally (current project)\n")
             paths = config_manager.paths.get_local_paths()
             for path in [paths["servers_dir"]]:
-                path.mkdir(parents=True, exist_ok=True)
+                ensure_directory(path)
 
         # Server setup with memorable ID
         if not server_id:
             server_id = Prompt.ask("Server ID (easy to remember)", default="my-server")
 
         server_name = Prompt.ask("Server name", default="My MCP Server")
-        server_url = Prompt.ask("Server URL")
 
-        # Optional authentication
-        if Confirm.ask("Does this server require authentication?", default=False):
-            auth_token = Prompt.ask("Authorization token", password=True)
+        # Transport selection
+        console.print("\n[bold]Select transport type:[/bold]")
+        console.print("  1. HTTP  - Remote server via URL")
+        console.print("  2. stdio - Local server via command (subprocess)\n")
+
+        transport_choice = Prompt.ask("Transport type", choices=["1", "2"], default="1")
+
+        if transport_choice == "1":
+            # HTTP transport
+            server_url = Prompt.ask("Server URL")
+
+            # Create HTTP server config
+            server_config = {
+                "name": server_name,
+                "transport": "http",
+                "url": server_url,
+            }
+
+            # Authentication method selection (only for HTTP)
+            auth_method = show_authentication_menu(console)
+
+            if auth_method == "oauth":
+                server_config["oauth"] = True
+                console.print("✅ OAuth 2.1 flow will be used during testing")
+                console.print(
+                    "💡 The framework will handle authorization automatically"
+                )
+                console.print(
+                    "🌐 Your browser will open for authorization when testing begins"
+                )
+
+            elif auth_method == "token":
+                auth_token = Prompt.ask("Authorization token or API key", password=True)
+                if auth_token:
+                    server_config["authorization_token"] = auth_token
+                console.print("✅ Bearer token authentication configured")
+
+            else:  # auth_method == "none"
+                console.print("✅ No authentication will be used")
+
         else:
-            auth_token = ""
+            # stdio transport
+            console.print("\n[dim]Examples of stdio commands:[/dim]")
+            console.print("  npx -y @modelcontextprotocol/server-time")
+            console.print("  npx -y @modelcontextprotocol/server-fetch")
+            console.print("  uvx mcp-server-memory\n")
 
-        # Create server config
-        server_config = {
-            "name": server_name,
-            "type": "url",
-            "url": server_url,
-            "tool_configuration": {"enabled": True},
-        }
+            command = Prompt.ask("Command to run server")
 
-        if auth_token:
-            server_config["authorization_token"] = auth_token
+            # Create stdio server config
+            server_config = {
+                "name": server_name,
+                "transport": "stdio",
+                "command": command,
+            }
+
+            # Optional: Environment variables
+            if Confirm.ask("Add environment variables?", default=False):
+                console.print(
+                    "[dim]Enter environment variables (leave blank to finish)[/dim]"
+                )
+                env_vars = {}
+                while True:
+                    key = Prompt.ask(
+                        "Variable name (or press Enter to finish)", default=""
+                    )
+                    if not key:
+                        break
+                    value = Prompt.ask(f"Value for {key}")
+                    env_vars[key] = value
+                if env_vars:
+                    server_config["env"] = env_vars
+
+            # Optional: Working directory
+            if Confirm.ask("Set working directory?", default=False):
+                cwd = Prompt.ask("Working directory path", default=".")
+                if cwd and cwd != ".":
+                    server_config["cwd"] = cwd
+
+        # Configuration confirmation
+        console.print("\n[bold]Configuration Summary:[/bold]")
+        console.print(f"Server ID: [cyan]{server_id}[/cyan]")
+        console.print(f"Server Name: [cyan]{server_name}[/cyan]")
+
+        if transport_choice == "1":
+            # HTTP transport summary
+            console.print("Transport: [blue]HTTP[/blue]")
+            console.print(f"Server URL: [cyan]{server_url}[/cyan]")
+
+            if auth_method == "oauth":
+                console.print("Authentication: [green]OAuth 2.1 Flow[/green]")
+            elif auth_method == "token":
+                console.print("Authentication: [yellow]Bearer Token[/yellow]")
+            else:
+                console.print("Authentication: [dim]None[/dim]")
+        else:
+            # stdio transport summary
+            console.print("Transport: [blue]stdio[/blue]")
+            console.print(f"Command: [cyan]{server_config['command']}[/cyan]")
+
+            if server_config.get("env"):
+                console.print(
+                    f"Environment: [yellow]{len(server_config['env'])} variables[/yellow]"
+                )
+            if server_config.get("cwd"):
+                console.print(f"Working Directory: [cyan]{server_config['cwd']}[/cyan]")
+
+        if not Confirm.ask("\nSave this configuration?", default=True):
+            console.print("[yellow]Configuration cancelled.[/yellow]")
+            return
 
         # Save to appropriate location
         if use_global:
@@ -111,13 +201,12 @@ def create_server_command():
             local_paths = config_manager.paths.get_local_paths()
             server_file = local_paths["servers_dir"] / f"{server_id}.json"
 
-        with server_file.open("w") as f:
-            json.dump(server_config, f, indent=2)
+        safe_json_dump(server_config, server_file, "creating server configuration")
 
         console.print(f"✅ Server configuration saved: {server_file}")
         console.print(f"✅ Created server config: [cyan]{server_id}[/cyan]")
         console.print(
-            f"\n[bold]Test it with:[/bold] [cyan]mcp-t health {server_id}[/cyan]"
+            f"\n[bold]Test it with:[/bold] [cyan]mcp-t run <suite-id> {server_id}[/cyan]"
         )
 
         trigger_post_command_hooks(ctx)
@@ -125,7 +214,7 @@ def create_server_command():
     return mcpt_create_server
 
 
-def create_suite_command():
+def create_suite_command() -> click.Command:
     """Create the suite subcommand"""
 
     @click.command(name="suite")
@@ -137,7 +226,7 @@ def create_suite_command():
     )
     @click.option("--id", "suite_id", help="Suite ID (if not provided, will prompt)")
     @click.pass_context
-    def mcpt_create_suite(ctx, use_global: bool, suite_id: Optional[str]):
+    def mcpt_create_suite(ctx, use_global: bool, suite_id: str | None):
         """Create test suite with interactive type selection
 
         Interactive wizard to create test suites with templates for different
@@ -157,12 +246,12 @@ def create_suite_command():
             console.print("📍 Saving configuration globally (system-wide)\n")
             paths = config_manager.paths.get_system_paths()
             for path in [paths["suites_dir"]]:
-                path.mkdir(parents=True, exist_ok=True)
+                ensure_directory(path)
         else:
             console.print("📍 Saving configuration locally (current project)\n")
             paths = config_manager.paths.get_local_paths()
             for path in [paths["suites_dir"]]:
-                path.mkdir(parents=True, exist_ok=True)
+                ensure_directory(path)
 
         # Always show interactive type selection
         test_type = show_test_type_menu(console)
@@ -197,67 +286,7 @@ def create_suite_command():
     return mcpt_create_suite
 
 
-def create_compliance_command():
-    """Create compliance suite command"""
-
-    @click.command(name="compliance")
-    @click.option(
-        "--global", "use_global", is_flag=True, help="Save configuration globally"
-    )
-    @click.option("--id", "suite_id", help="Suite ID (auto-generated if not provided)")
-    def mcpt_create_compliance(use_global: bool, suite_id: Optional[str]):
-        """Create compliance test suite for MCP protocol validation
-
-        Examples:
-          mcp-t create compliance
-          mcp-t create compliance --id my-compliance-tests
-        """
-        _create_typed_suite("compliance", use_global, suite_id)
-
-    return mcpt_create_compliance
-
-
-def create_security_command():
-    """Create security suite command"""
-
-    @click.command(name="security")
-    @click.option(
-        "--global", "use_global", is_flag=True, help="Save configuration globally"
-    )
-    @click.option("--id", "suite_id", help="Suite ID (auto-generated if not provided)")
-    def mcpt_create_security(use_global: bool, suite_id: Optional[str]):
-        """Create security test suite for auth and vulnerability testing
-
-        Examples:
-          mcp-t create security
-          mcp-t create security --id my-security-tests
-        """
-        _create_typed_suite("security", use_global, suite_id)
-
-    return mcpt_create_security
-
-
-def create_conversational_command():
-    """Create conversational suite command"""
-
-    @click.command(name="conversational")
-    @click.option(
-        "--global", "use_global", is_flag=True, help="Save configuration globally"
-    )
-    @click.option("--id", "suite_id", help="Suite ID (auto-generated if not provided)")
-    def mcpt_create_conversational(use_global: bool, suite_id: Optional[str]):
-        """Create conversational test suite for multi-turn dialogue testing
-
-        Examples:
-          mcp-t create conversational
-          mcp-t create conversational --id my-chat-tests
-        """
-        _create_typed_suite("conversational", use_global, suite_id)
-
-    return mcpt_create_conversational
-
-
-def _create_typed_suite(test_type: str, use_global: bool, suite_id: Optional[str]):
+def _create_typed_suite(test_type: str, use_global: bool, suite_id: str | None):
     """Helper function to create a specific test suite type"""
     console = get_console()
     config_manager = ConfigManager()
@@ -294,7 +323,7 @@ def _create_typed_suite(test_type: str, use_global: bool, suite_id: Optional[str
     )
 
 
-def create_test_case_command():
+def create_test_case_command() -> click.Command:
     """Create the test-case subcommand"""
 
     @click.command(name="test-case")
@@ -371,8 +400,7 @@ def create_test_case_command():
             return
 
         # Save updated suite
-        with suite_file.open("w") as f:
-            json.dump(suite_dict, f, indent=2)
+        safe_json_dump(suite_dict, suite_file, "adding test case to suite")
 
         console.print(f"✅ Added test case '{test_id}' to suite '{suite_id}'")
         console.print(f"✅ Suite now has {len(suite_dict['test_cases'])} test cases")
@@ -380,7 +408,7 @@ def create_test_case_command():
     return mcpt_create_test_case
 
 
-def show_test_type_menu(console) -> str:
+def show_test_type_menu(console: MCPConsole) -> str:
     """Show interactive test type selection menu"""
     console.print("\n[bold]What type of test would you like to create?[/bold]\n")
 
@@ -411,7 +439,35 @@ def show_test_type_menu(console) -> str:
     return selected_type
 
 
-def get_template_for_type(test_type: str) -> Optional[dict]:
+def show_authentication_menu(console: MCPConsole) -> str:
+    """Show interactive authentication method selection menu with detailed guidance"""
+    console.print("\n[bold]Authentication Configuration[/bold]")
+    console.print(
+        "[dim]Choose the authentication method your MCP server supports:[/dim]\n"
+    )
+
+    console.print(
+        "[cyan]1.[/cyan] [green]OAuth 2.1[/green] - Full authorization flow with browser [dim](Production servers)[/dim]"
+    )
+    console.print(
+        "[cyan]2.[/cyan] [yellow]Bearer Token[/yellow] - API key or pre-shared token [dim](Simple auth, testing)[/dim]"
+    )
+    console.print(
+        "[cyan]3.[/cyan] [dim]No Auth[/dim] - Open access, no authentication [dim](Development, public APIs)[/dim]"
+    )
+
+    console.print(
+        "\n[dim]💡 OAuth 2.1 is the MCP specification standard and recommended for production use.[/dim]"
+    )
+    console.print()
+
+    choice = Prompt.ask(
+        "Select authentication method", choices=["1", "2", "3"], default="1"
+    )
+    return {"1": "oauth", "2": "token", "3": "none"}[choice]
+
+
+def get_template_for_type(test_type: str) -> dict[str, Any] | None:
     """Get template configuration for test type"""
     config_manager = ConfigManager()
 
@@ -424,12 +480,16 @@ def get_template_for_type(test_type: str) -> Optional[dict]:
 
     template_enum = template_map.get(test_type)
     if template_enum:
-        return config_manager.templates[template_enum]
+        from typing import cast
+
+        return cast(dict[str, Any], config_manager.templates[template_enum])
 
     return None
 
 
-def customize_template_test_cases(console, template_test_cases: list) -> list:
+def customize_template_test_cases(
+    console: MCPConsole, template_test_cases: list[dict]
+) -> list[dict]:
     """Allow user to customize template test cases"""
     console.print("📝 Customizing template test cases...")
 
