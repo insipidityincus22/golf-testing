@@ -7,7 +7,7 @@ class ComplianceTestConfig(BaseTestConfig):
     """MCP protocol compliance test configuration"""
 
     protocol_version: str = Field(
-        default="1.0", description="MCP protocol version to test"
+        default="2025-06-18", description="MCP protocol version to test"
     )
     required_capabilities: list[str] = Field(
         default_factory=list, description="Required MCP capabilities to validate"
