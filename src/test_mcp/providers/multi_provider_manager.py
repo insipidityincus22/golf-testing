@@ -59,13 +59,14 @@ class MultiProviderManager:
                 }
             else:
                 results[provider_name] = result
-                self.performance_history.append(
-                    {
-                        "provider": provider_name,
-                        "timestamp": datetime.now().isoformat(),
-                        **result,
-                    }
-                )
+                if isinstance(result, dict):
+                    self.performance_history.append(
+                        {
+                            "provider": provider_name,
+                            "timestamp": datetime.now().isoformat(),
+                            **result,
+                        }
+                    )
 
         return results
 
@@ -123,7 +124,7 @@ class MultiProviderManager:
             provider_stats[provider].append(record)
 
         # Calculate aggregated statistics
-        comparison_report = {
+        comparison_report: dict[str, Any] = {
             "timestamp": datetime.now().isoformat(),
             "total_requests": len(self.performance_history),
             "providers_tested": list(provider_stats.keys()),
