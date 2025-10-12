@@ -1,9 +1,8 @@
-import asyncio
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class ProviderType(str, Enum):
@@ -36,28 +35,26 @@ class ProviderMetrics:
 class ProviderInterface(ABC):
     """Abstract interface for LLM providers with async support"""
 
-    def __init__(self, provider_type: ProviderType, config: dict[str, Any]):
+    def __init__(self, provider_type: ProviderType, config: dict[str, str]):
         self.provider_type = provider_type
         self.config = config
         self.metrics = ProviderMetrics(provider=provider_type)
 
     @abstractmethod
-    async def send_message(
-        self, message: str, system_prompt: Optional[str] = None
-    ) -> str:
+    async def send_message(self, message: str, system_prompt: str | None = None) -> str:
         """Send message and get response"""
         pass
 
     @abstractmethod
     async def send_message_with_tools(
-        self, message: str, tools: list[dict], system_prompt: Optional[str] = None
+        self, message: str, tools: list[dict], system_prompt: str | None = None
     ) -> tuple[str, list[dict]]:
         """Send message with tool calling capability"""
         pass
 
     @abstractmethod
     async def send_mcp_request(
-        self, method: str, params: Optional[dict[str, Any]] = None
+        self, method: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Send direct MCP protocol request (for compliance testing)"""
         pass
@@ -80,15 +77,13 @@ class ProviderInterface(ABC):
 class AnthropicProvider(ProviderInterface):
     """Anthropic Claude provider implementation"""
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: dict[str, str]):
         super().__init__(ProviderType.ANTHROPIC, config)
         self.api_key = config["api_key"]
         self.model = config.get("model", "claude-sonnet-4-20250514")
         self.sessions: dict[str, Any] = {}
 
-    async def send_message(
-        self, message: str, system_prompt: Optional[str] = None
-    ) -> str:
+    async def send_message(self, message: str, system_prompt: str | None = None) -> str:
         """Send message using Anthropic API"""
         start_time = time.perf_counter()
         self.metrics.requests_made += 1
@@ -110,7 +105,7 @@ class AnthropicProvider(ProviderInterface):
             raise
 
     async def send_message_with_tools(
-        self, message: str, tools: list[dict], system_prompt: Optional[str] = None
+        self, message: str, tools: list[dict], system_prompt: str | None = None
     ) -> tuple[str, list[dict]]:
         """Send message with tool calling"""
         # Implementation will reuse existing agent tool calling logic
@@ -119,7 +114,7 @@ class AnthropicProvider(ProviderInterface):
         return response, tool_results
 
     async def send_mcp_request(
-        self, method: str, params: Optional[dict[str, Any]] = None
+        self, method: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Send direct MCP protocol request for compliance testing"""
         start_time = time.perf_counter()
@@ -142,7 +137,7 @@ class AnthropicProvider(ProviderInterface):
 
             # Send direct HTTP request to MCP server endpoint
             # This bypasses the Anthropic API for direct protocol access
-            mcp_server_url: Optional[str] = self.config.get("mcp_server_url")
+            mcp_server_url: str | None = self.config.get("mcp_server_url")
             if not mcp_server_url:
                 raise ValueError("Direct MCP requests require mcp_server_url in config")
 
@@ -174,9 +169,7 @@ class AnthropicProvider(ProviderInterface):
         if session_id in self.sessions:
             del self.sessions[session_id]
 
-    async def _anthropic_api_call(
-        self, message: str, system_prompt: Optional[str]
-    ) -> str:
+    async def _anthropic_api_call(self, message: str, system_prompt: str | None) -> str:
         """Internal API call implementation"""
         # Reuse existing ClaudeAgent implementation logic
         # This ensures compatibility while providing async interface
@@ -195,9 +188,6 @@ class AnthropicProvider(ProviderInterface):
                 mcp_server = AgentMCPServerConfig(
                     url=server["url"],
                     name=server["name"],
-                    tool_configuration=server.get(
-                        "tool_configuration", {"enabled": True}
-                    ),
                     authorization_token=server.get("authorization_token"),
                 )
                 mcp_servers.append(mcp_server)
@@ -206,10 +196,10 @@ class AnthropicProvider(ProviderInterface):
             anthropic_api_key=self.api_key, mcp_servers=mcp_servers
         )
 
-        # Create agent and execute synchronously (wrapped in async)
+        # Create agent and execute asynchronously
         agent = ClaudeAgent(agent_config)
         agent.start_new_session()
 
-        # Run synchronous operation in thread pool
-        response = await asyncio.to_thread(agent.send_message, message)
+        # Call async method directly
+        response = await agent.send_message(message)
         return response
