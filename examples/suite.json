@@ -1,0 +1,39 @@
+{
+  "suite_id": "example_suite_001",
+  "name": "Hacker News MCP Server Tests",
+  "description": "Test suite for Hacker News MCP server functionality",
+  "created_at": "2024-01-01T00:00:00Z",
+  "test_cases": [
+    {
+      "test_id": "hackernews_greeting",
+      "user_message": "Hello! Can you help me browse Hacker News?",
+      "success_criteria": "Agent should respond politely and explain Hacker News capabilities",
+      "timeout_seconds": 60,
+      "metadata": {
+        "category": "basic_interaction",
+        "priority": "high"
+      }
+    },
+    {
+      "test_id": "hackernews_tools",
+      "user_message": "What Hacker News tools do you have available?",
+      "success_criteria": "Agent should list available Hacker News MCP tools like get stories, search, etc.",
+      "timeout_seconds": 90,
+      "metadata": {
+        "category": "tool_discovery",
+        "priority": "high"
+      }
+    },
+    {
+      "test_id": "hackernews_stories",
+      "user_message": "Can you show me some top Hacker News stories?",
+      "success_criteria": "Agent should attempt to fetch and display Hacker News stories",
+      "timeout_seconds": 120,
+      "metadata": {
+        "category": "basic_functionality",
+        "priority": "high"
+      }
+    }
+  ]
+}
+

@@ -1,0 +1,848 @@
+import json
+import os
+from enum import Enum
+from pathlib import Path
+from typing import Any, Optional
+
+import yaml
+from pydantic import BaseModel, Field
+
+from ..models.compliance import ComplianceTestConfig, ComplianceTestSuite
+from ..models.conversational import ConversationalTestConfig, ConversationTestSuite
+from ..models.factory import TestSuiteFactory, TestSuiteType
+from ..models.security import SecurityTestConfig, SecurityTestSuite
+
+
+class MCPServerConfig(BaseModel):
+    """Type-safe MCP server configuration"""
+
+    name: str = Field(..., description="Server name identifier")
+    type: str = Field(default="url", description="Server connection type")
+    url: Optional[str] = Field(
+        default=None, description="Server URL for HTTP connections"
+    )
+    command: Optional[str] = Field(
+        default=None, description="Command for subprocess servers"
+    )
+    args: Optional[list[str]] = Field(
+        default=None, description="Arguments for subprocess servers"
+    )
+    env: Optional[dict[str, str]] = Field(
+        default=None, description="Environment variables"
+    )
+    tool_configuration: Optional[dict[str, Any]] = Field(
+        default_factory=lambda: {"enabled": True},
+        description="Tool configuration settings",
+    )
+    authorization_token: Optional[str] = Field(
+        default=None, description="Authorization token for server access"
+    )
+
+
+class ConfigTemplate(str, Enum):
+    """Available configuration templates"""
+
+    BASIC_SERVER = "basic_server"
+    SIMPLE_SUITE = "simple_suite"  # Used for compliance testing
+    SECURITY_SUITE = "security_suite"
+    WORKFLOW_SUITE = "workflow_suite"  # Renamed to conversational testing
+
+
+class MCPPaths:
+    """Configuration paths with support for local and XDG-compliant system directories"""
+
+    def __init__(self, app_name: str = "mcp-t", use_local: bool = True):
+        self.app_name = app_name
+        self.use_local = use_local
+
+    def get_local_paths(self) -> dict[str, Path]:
+        """Get local project configuration paths."""
+        base_dir = Path.cwd()
+        return {
+            "config_dir": base_dir / "configs",
+            "servers_dir": base_dir / "configs" / "servers",
+            "suites_dir": base_dir / "configs" / "suites",
+        }
+
+    def get_system_paths(self) -> dict[str, Path]:
+        """Get XDG-compliant system configuration paths."""
+        # XDG Base Directory compliant paths (hardcoded, not from env vars)
+        config_base = Path.home() / ".config" / self.app_name
+        data_base = Path.home() / ".local" / "share" / self.app_name
+        cache_base = Path.home() / ".cache" / self.app_name
+        state_base = Path.home() / ".local" / "state" / self.app_name
+
+        return {
+            "config_dir": config_base,
+            "servers_dir": config_base / "servers",
+            "suites_dir": config_base / "suites",
+            "data_dir": data_base,
+            "cache_dir": cache_base,
+            "state_dir": state_base,
+        }
+
+    def get_all_paths(self) -> dict[str, Any]:
+        """Get combined local and system paths with precedence."""
+        local_paths = self.get_local_paths()
+        system_paths = self.get_system_paths()
+
+        return {
+            "local": local_paths,
+            "system": system_paths,
+            "servers_dirs": [local_paths["servers_dir"], system_paths["servers_dir"]],
+            "suites_dirs": [local_paths["suites_dir"], system_paths["suites_dir"]],
+        }
+
+
+class ConfigManager:
+    """Production-ready configuration management with organized directory structure"""
+
+    def __init__(self):
+        self.paths = MCPPaths()
+        self.templates = self._load_templates()
+
+        # Ensure system directories exist (for backward compatibility)
+        system_paths = self.paths.get_system_paths()
+        for path in [
+            system_paths["servers_dir"],
+            system_paths["suites_dir"],
+            system_paths["data_dir"],
+            system_paths["cache_dir"],
+        ]:
+            path.mkdir(parents=True, exist_ok=True)
+
+    def _load_templates(self) -> dict[str, dict[str, Any]]:
+        """Load built-in configuration templates"""
+        return {
+            ConfigTemplate.BASIC_SERVER: {
+                "type": "url",
+                "url": "${MCP_SERVER_URL}",
+                "name": "${MCP_SERVER_NAME:-My MCP Server}",
+                "tool_configuration": {"enabled": True},
+                "authorization_token": "${MCP_AUTH_TOKEN:-}",
+            },
+            ConfigTemplate.SIMPLE_SUITE: {
+                "suite_id": "${SUITE_ID:-simple_test_suite}",
+                "name": "${SUITE_NAME:-Simple MCP Test Suite}",
+                "description": "${SUITE_DESCRIPTION:-Basic functionality testing}",
+                "test_type": "basic",
+                "parallelism": 3,
+                "test_cases": [
+                    {
+                        "test_id": "greeting_test",
+                        "user_message": "Hello! Can you help me?",
+                        "success_criteria": "Agent should respond politely and offer assistance",
+                        "timeout_seconds": 60,
+                        "metadata": {
+                            "category": "basic_interaction",
+                            "priority": "high",
+                        },
+                    },
+                    {
+                        "test_id": "capability_discovery",
+                        "user_message": "What tools or capabilities do you have?",
+                        "success_criteria": "Agent should list available tools and their purposes",
+                        "timeout_seconds": 90,
+                        "metadata": {"category": "capabilities", "priority": "high"},
+                    },
+                ],
+                "created_at": "${CURRENT_TIMESTAMP:-2024-01-01T00:00:00Z}",
+            },
+            ConfigTemplate.SECURITY_SUITE: {
+                "suite_id": "${SUITE_ID:-security_test_suite}",
+                "name": "${SUITE_NAME:-Security Test Suite}",
+                "description": "${SUITE_DESCRIPTION:-Security testing scenarios}",
+                "test_type": "security",
+                "parallelism": 2,
+                "test_cases": [
+                    {
+                        "test_id": "auth_validation",
+                        "user_message": "Test authentication mechanisms",
+                        "success_criteria": "Proper authentication handling",
+                        "timeout_seconds": 90,
+                        "metadata": {"category": "authentication", "priority": "high"},
+                    },
+                    {
+                        "test_id": "rate_limiting",
+                        "user_message": "Test rate limiting behavior",
+                        "success_criteria": "Rate limits enforced correctly",
+                        "timeout_seconds": 120,
+                        "metadata": {"category": "rate_limiting", "priority": "medium"},
+                    },
+                    {
+                        "test_id": "input_validation",
+                        "user_message": "Send malformed input to test validation",
+                        "success_criteria": "Invalid input rejected gracefully",
+                        "timeout_seconds": 60,
+                        "metadata": {
+                            "category": "input_validation",
+                            "priority": "high",
+                        },
+                    },
+                ],
+                "created_at": "${CURRENT_TIMESTAMP:-2024-01-01T00:00:00Z}",
+            },
+            ConfigTemplate.WORKFLOW_SUITE: {
+                "suite_id": "${SUITE_ID:-workflow_test_suite}",
+                "name": "${SUITE_NAME:-Workflow Test Suite}",
+                "description": "${SUITE_DESCRIPTION:-Multi-turn conversation workflows}",
+                "test_type": "workflow",
+                "parallelism": 1,
+                "test_cases": [
+                    {
+                        "test_id": "multi_turn_conversation",
+                        "user_message": "Start complex multi-step task",
+                        "success_criteria": "Maintains context across multiple interactions",
+                        "timeout_seconds": 180,
+                        "metadata": {"category": "conversation", "priority": "high"},
+                    },
+                    {
+                        "test_id": "error_recovery",
+                        "user_message": "Trigger error and test recovery",
+                        "success_criteria": "Graceful error handling and recovery",
+                        "timeout_seconds": 120,
+                        "metadata": {
+                            "category": "error_handling",
+                            "priority": "medium",
+                        },
+                    },
+                    {
+                        "test_id": "context_persistence",
+                        "user_message": "Reference earlier conversation details",
+                        "success_criteria": "Maintains conversation context",
+                        "timeout_seconds": 90,
+                        "metadata": {"category": "context", "priority": "high"},
+                    },
+                ],
+                "created_at": "${CURRENT_TIMESTAMP:-2024-01-01T00:00:00Z}",
+            },
+        }
+
+    def save_server_config(self, server_id: str, server_config: dict) -> Path:
+        """Save server configuration with memorable ID"""
+        system_paths = self.paths.get_system_paths()
+        config_path = system_paths["servers_dir"] / f"{server_id}.json"
+
+        with open(config_path, "w") as f:
+            json.dump(server_config, f, indent=2)
+
+        return config_path
+
+    def save_suite_config(self, suite_id: str, suite_config: dict) -> Path:
+        """Save test suite configuration with memorable ID"""
+        system_paths = self.paths.get_system_paths()
+        config_path = system_paths["suites_dir"] / f"{suite_id}.json"
+
+        # Add creation timestamp if not provided
+        if "created_at" not in suite_config:
+            from datetime import datetime
+
+            suite_config["created_at"] = datetime.now().isoformat()
+
+        with open(config_path, "w") as f:
+            json.dump(suite_config, f, indent=2)
+
+        return config_path
+
+    def save_test_suite(
+        self, test_suite: TestSuiteType, use_global: bool = True
+    ) -> Path:
+        """Save test suite configuration from type-safe model"""
+        if use_global:
+            paths = self.paths.get_system_paths()
+        else:
+            paths = self.paths.get_local_paths()
+        config_path = paths["suites_dir"] / f"{test_suite.suite_id}.json"
+
+        # Add suite_type field for proper loading
+        suite_data = test_suite.model_dump(mode="json")
+        if hasattr(test_suite, "__class__"):
+            if test_suite.__class__.__name__ == "ComplianceTestSuite":
+                suite_data["suite_type"] = "compliance"
+            elif test_suite.__class__.__name__ == "SecurityTestSuite":
+                suite_data["suite_type"] = "security"
+            elif test_suite.__class__.__name__ == "ConversationTestSuite":
+                suite_data["suite_type"] = "conversational"
+
+        with open(config_path, "w") as f:
+            json.dump(suite_data, f, indent=2)
+
+        return config_path
+
+    def create_compliance_template(self) -> ComplianceTestSuite:
+        """Create default compliance test suite template"""
+        return ComplianceTestSuite(
+            suite_id="compliance-tests",
+            name="MCP Protocol Compliance Tests",
+            description="Standard MCP protocol validation tests",
+            test_cases=[
+                ComplianceTestConfig(
+                    test_id="protocol_handshake",
+                    protocol_version="1.0",
+                    check_categories=["handshake"],
+                ),
+                ComplianceTestConfig(
+                    test_id="capabilities_discovery", check_categories=["capabilities"]
+                ),
+                ComplianceTestConfig(
+                    test_id="tool_enumeration", check_categories=["tools"]
+                ),
+                ComplianceTestConfig(
+                    test_id="oauth_flow",
+                    oauth_config={"flow": "authorization_code"},
+                    check_categories=["auth"],
+                ),
+            ],
+            auth_required=False,
+            strict_mode=True,
+            parallelism=2,  # Protocol tests are lightweight
+        )
+
+    def create_security_template(self) -> SecurityTestSuite:
+        """Create default security test suite template"""
+        return SecurityTestSuite(
+            suite_id="security-tests",
+            name="MCP Security Assessment Tests",
+            description="Authentication and vulnerability testing",
+            test_cases=[
+                SecurityTestConfig(
+                    test_id="auth_validation",
+                    auth_method="oauth",
+                    vulnerability_checks=["auth"],
+                ),
+                SecurityTestConfig(
+                    test_id="rate_limiting",
+                    auth_method="token",
+                    rate_limit_threshold=100,
+                    vulnerability_checks=["rate_limit"],
+                ),
+                SecurityTestConfig(
+                    test_id="injection_testing",
+                    auth_method="oauth",
+                    vulnerability_checks=["injection"],
+                ),
+            ],
+            auth_required=True,
+            include_penetration_tests=False,
+            parallelism=2,  # Security tests are resource-intensive
+        )
+
+    def create_conversational_template(self) -> ConversationTestSuite:
+        """Create default conversational test suite template"""
+        return ConversationTestSuite(
+            suite_id="conversational-tests",
+            name="Multi-Turn Conversation Tests",
+            description="Interactive dialogue and workflow testing",
+            test_cases=[
+                ConversationalTestConfig(
+                    test_id="greeting_and_capabilities",
+                    user_message="Hello! Can you help me?",
+                    success_criteria="Agent responds politely and explains capabilities",
+                    max_turns=3,
+                ),
+                ConversationalTestConfig(
+                    test_id="multi_turn_workflow",
+                    user_message="I need to complete a complex task with multiple steps",
+                    success_criteria="Agent successfully guides through multi-step process",
+                    max_turns=10,
+                    context_persistence=True,
+                ),
+            ],
+            auth_required=False,
+            user_patience_level="medium",
+            conversation_style="natural",
+            parallelism=3,  # Conversation tests moderate concurrency
+        )
+
+    def get_server_by_id(self, server_id: str) -> MCPServerConfig:
+        """Load server configuration by ID, checking local first."""
+        paths = self.paths.get_all_paths()
+
+        # Check local first, then system
+        for servers_dir in paths["servers_dirs"]:
+            server_file = servers_dir / f"{server_id}.json"
+            if server_file.exists():
+                try:
+                    with server_file.open() as f:
+                        config_data = json.load(f)
+                    return MCPServerConfig(**config_data)
+                except Exception as e:
+                    raise ValueError(
+                        f"Error loading server '{server_id}': {str(e)}\n"
+                        f"The configuration file may be corrupted or have invalid format."
+                    ) from e
+
+        # Server not found, provide helpful error message
+        available_servers = [
+            f.stem
+            for path in paths["servers_dirs"]
+            for f in path.glob("*.json")
+            if f.is_file()
+        ]
+        raise ValueError(
+            f"Server '{server_id}' not found.\n"
+            f"Available servers: {', '.join(available_servers) if available_servers else 'none'}\n"
+            f"Create a new server with: mcp-t create server"
+        )
+
+    def get_suite_by_id(self, suite_id: str) -> TestSuiteType:
+        """Load test suite by ID using type-safe models, checking local first."""
+        return self.load_test_suite(suite_id)
+
+    def load_test_suite(self, suite_id: str) -> TestSuiteType:
+        """Load test suite with appropriate type-specific model"""
+        try:
+            config_data = self._load_suite_config(suite_id)
+        except FileNotFoundError:
+            available_suites = [
+                f.stem
+                for path in self.paths.get_all_paths()["suites_dirs"]
+                for f in path.glob("*.json")
+                if f.is_file()
+            ]
+            raise ValueError(
+                f"Test suite '{suite_id}' not found.\n"
+                f"Available suites: {', '.join(available_suites) if available_suites else 'none'}\n"
+                f"Create a new suite with: mcp-t create suite"
+            ) from None
+
+        # Determine suite type from config or filename
+        suite_type = config_data.get("suite_type") or self._infer_suite_type(suite_id)
+
+        try:
+            return TestSuiteFactory.create_suite(suite_type, config_data)
+        except Exception as e:
+            if (
+                "validation error" in str(e).lower()
+                or "field required" in str(e).lower()
+            ):
+                raise ValueError(
+                    f"Test suite '{suite_id}' has an incompatible format.\n"
+                    f"This may be an older configuration that needs updating.\n"
+                    f"Try creating a new {suite_type} suite with: mcp-t create suite\n"
+                    f"Original error: {str(e)}"
+                ) from e
+            else:
+                raise ValueError(
+                    f"Error loading test suite '{suite_id}': {str(e)}"
+                ) from None
+
+    def _load_suite_config(self, suite_id: str) -> dict[str, Any]:
+        """Load suite configuration data from file"""
+        paths = self.paths.get_all_paths()
+
+        # Check local first, then system
+        for suites_dir in paths["suites_dirs"]:
+            suite_file = suites_dir / f"{suite_id}.json"
+            if suite_file.exists():
+                with suite_file.open() as f:
+                    return json.load(f)
+
+        raise KeyError(
+            f"Suite '{suite_id}' not found in local or system configurations"
+        )
+
+    def _infer_suite_type(self, suite_id: str) -> str:
+        """Infer suite type from naming convention"""
+        if "compliance" in suite_id.lower():
+            return "compliance"
+        elif "security" in suite_id.lower():
+            return "security"
+        else:
+            return "conversational"
+
+    def list_servers(self) -> dict[str, dict[str, str]]:
+        """List all available servers from local and system paths."""
+        servers = {}
+        paths = self.paths.get_all_paths()
+
+        # Check local first, then system
+        for servers_dir in paths["servers_dirs"]:
+            if not servers_dir.exists():
+                continue
+
+            for server_file in servers_dir.glob("*.json"):
+                server_id = server_file.stem
+                if server_id in servers:
+                    continue  # Local takes precedence
+
+                try:
+                    with server_file.open() as f:
+                        config = json.load(f)
+
+                    # Determine source
+                    is_local = servers_dir == paths["local"]["servers_dir"]
+                    source = "local" if is_local else "system"
+
+                    servers[server_id] = {
+                        "name": config.get("name", server_id),
+                        "url": config.get("url", ""),
+                        "type": config.get("type", "url"),
+                        "source": source,
+                        "path": str(server_file),
+                    }
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+        return servers
+
+    def list_suites(self) -> dict[str, dict[str, Any]]:
+        """List all available test suites from local and system paths."""
+        suites = {}
+        paths = self.paths.get_all_paths()
+
+        # Check local first, then system
+        for suites_dir in paths["suites_dirs"]:
+            if not suites_dir.exists():
+                continue
+
+            for suite_file in suites_dir.glob("*.json"):
+                suite_id = suite_file.stem
+                if suite_id in suites:
+                    continue  # Local takes precedence
+
+                try:
+                    with suite_file.open() as f:
+                        config = json.load(f)
+
+                    # Determine source
+                    is_local = suites_dir == paths["local"]["suites_dir"]
+                    source = "local" if is_local else "system"
+
+                    suites[suite_id] = {
+                        "name": config.get("name", suite_id),
+                        "description": config.get("description", ""),
+                        "test_count": len(config.get("test_cases", [])),
+                        "source": source,
+                        "path": str(suite_file),
+                    }
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+        return suites
+
+    def list_server_ids(self) -> list[str]:
+        """List all server IDs for tab completion"""
+        server_ids: set[str] = set()
+        paths = self.paths.get_all_paths()
+
+        for servers_dir in paths["servers_dirs"]:
+            if servers_dir.exists():
+                server_ids.update(f.stem for f in servers_dir.glob("*.json"))
+
+        return sorted(server_ids)
+
+    def list_suite_ids(self) -> list[str]:
+        """List all suite IDs for tab completion"""
+        suite_ids: set[str] = set()
+        paths = self.paths.get_all_paths()
+
+        for suites_dir in paths["suites_dirs"]:
+            if suites_dir.exists():
+                suite_ids.update(f.stem for f in suites_dir.glob("*.json"))
+
+        return sorted(suite_ids)
+
+    def create_template(
+        self,
+        template_type: ConfigTemplate,
+        output_path: str,
+        substitutions: Optional[dict[str, str]] = None,
+    ) -> Path:
+        """Create configuration file from template with environment variable substitution"""
+        template_data = self.templates[template_type].copy()
+
+        if substitutions:
+            # Apply custom substitutions first
+            template_json = json.dumps(template_data)
+            for key, value in substitutions.items():
+                template_json = template_json.replace(f"${{{key}}}", value)
+            template_data = json.loads(template_json)
+
+        # Apply environment variable substitution
+        expanded_data = self._expand_environment_variables(template_data)
+
+        # Add current timestamp if template uses it
+        if "${CURRENT_TIMESTAMP}" in json.dumps(expanded_data):
+            from datetime import datetime
+
+            current_time = datetime.now().isoformat()
+            expanded_json = json.dumps(expanded_data).replace(
+                "${CURRENT_TIMESTAMP}", current_time
+            )
+            expanded_data = json.loads(expanded_json)
+
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Determine format from extension
+        if (
+            output_file.suffix.lower() == ".yaml"
+            or output_file.suffix.lower() == ".yml"
+        ):
+            with open(output_file, "w") as f:
+                yaml.dump(expanded_data, f, default_flow_style=False, indent=2)
+        else:
+            with open(output_file, "w") as f:
+                json.dump(expanded_data, f, indent=2)
+
+        return output_file
+
+    def _expand_environment_variables(self, data: Any) -> Any:
+        """Recursively expand environment variables in configuration data"""
+        if isinstance(data, str):
+            # Handle ${VAR} and ${VAR:-default} patterns
+            import re
+
+            def replace_env_var(match):
+                var_expr = match.group(1)
+                if ":-" in var_expr:
+                    var_name, default_value = var_expr.split(":-", 1)
+                    return os.environ.get(var_name, default_value)
+                else:
+                    return os.environ.get(
+                        var_expr, match.group(0)
+                    )  # Return original if not found
+
+            return re.sub(r"\$\{([^}]+)\}", replace_env_var, data)
+
+        elif isinstance(data, dict):
+            return {
+                key: self._expand_environment_variables(value)
+                for key, value in data.items()
+            }
+        elif isinstance(data, list):
+            return [self._expand_environment_variables(item) for item in data]
+        else:
+            return data
+
+    def validate_config(
+        self, config_path: str, config_type: str = "auto"
+    ) -> dict[str, Any]:
+        """Validate configuration file and return validation results"""
+        config_file = Path(config_path)
+
+        if not config_file.exists():
+            return {
+                "valid": False,
+                "errors": [f"Configuration file not found: {config_file}"],
+                "warnings": [],
+            }
+
+        try:
+            # Load configuration
+            with open(config_file) as f:
+                if config_file.suffix.lower() in [".yaml", ".yml"]:
+                    config_data = yaml.safe_load(f)
+                else:
+                    config_data = json.load(f)
+
+            # Auto-detect configuration type
+            if config_type == "auto":
+                config_type = self._detect_config_type(config_data)
+
+            # Validate based on type
+            errors = []
+            warnings = []
+
+            if config_type == "server":
+                try:
+                    MCPServerConfig(**config_data)
+                except Exception as e:
+                    errors.append(f"Server configuration validation error: {str(e)}")
+            elif config_type == "suite":
+                try:
+                    # Validate using type-safe suite creation
+                    suite_type = config_data.get("suite_type", "conversational")
+                    TestSuiteFactory.create_suite(suite_type, config_data)
+                except Exception as e:
+                    errors.append(
+                        f"Test suite configuration validation error: {str(e)}"
+                    )
+
+            # Check for common issues
+            warnings.extend(self._check_common_issues(config_data, config_type))
+
+            return {
+                "valid": len(errors) == 0,
+                "errors": errors,
+                "warnings": warnings,
+                "config_type": config_type,
+                "environment_variables": self._extract_env_vars(config_data),
+            }
+
+        except Exception as e:
+            return {
+                "valid": False,
+                "errors": [f"Failed to parse configuration: {str(e)}"],
+                "warnings": [],
+            }
+
+    def _detect_config_type(self, config_data: dict[str, Any]) -> str:
+        """Auto-detect configuration type"""
+        if "test_cases" in config_data or "suite_id" in config_data:
+            return "suite"
+        elif "url" in config_data or "type" in config_data:
+            return "server"
+        else:
+            return "unknown"
+
+    def _check_common_issues(
+        self, config_data: dict[str, Any], config_type: str
+    ) -> list[str]:
+        """Check for common configuration issues"""
+        warnings = []
+
+        if config_type == "server":
+            # Check for missing environment variables
+            if isinstance(config_data.get("url"), str) and "${" in config_data["url"]:
+                if not self._env_var_exists(config_data["url"]):
+                    warnings.append(
+                        "Server URL contains undefined environment variables"
+                    )
+
+        elif config_type == "suite":
+            # Check parallelism
+            parallelism = config_data.get("parallelism", 1)
+            test_count = len(config_data.get("test_cases", []))
+            if parallelism > test_count:
+                warnings.append(
+                    f"Parallelism ({parallelism}) exceeds test count ({test_count})"
+                )
+
+            # Check for very long timeouts
+            for test_case in config_data.get("test_cases", []):
+                timeout = test_case.get("timeout_seconds", 60)
+                if timeout > 300:
+                    warnings.append(
+                        f"Test '{test_case.get('test_id', 'unknown')}' has very long timeout ({timeout}s)"
+                    )
+
+        return warnings
+
+    def _env_var_exists(self, text: str) -> bool:
+        """Check if environment variables in text are defined"""
+        import re
+
+        env_vars = re.findall(r"\$\{([^}:]+)", text)
+        return all(var in os.environ for var in env_vars)
+
+    def _extract_env_vars(self, data: Any) -> list[str]:
+        """Extract all environment variable references from configuration"""
+        import re
+
+        env_vars = set()
+
+        def extract_from_value(value):
+            if isinstance(value, str):
+                matches = re.findall(r"\$\{([^}:]+)", value)
+                env_vars.update(matches)
+            elif isinstance(value, dict):
+                for v in value.values():
+                    extract_from_value(v)
+            elif isinstance(value, list):
+                for item in value:
+                    extract_from_value(item)
+
+        extract_from_value(data)
+        return sorted(env_vars)
+
+    def get_config_path(self, config_name: str, config_type: str = "config") -> Path:
+        """Get organized path for configuration file"""
+        system_paths = self.paths.get_system_paths()
+
+        if config_type == "config":
+            return system_paths["config_dir"] / config_name
+        elif config_type == "data":
+            return system_paths["data_dir"] / config_name
+        elif config_type == "cache":
+            return system_paths["cache_dir"] / config_name
+        else:
+            raise ValueError(f"Invalid config type: {config_type}")
+
+    def list_templates(self) -> list[dict[str, Any]]:
+        """List available configuration templates"""
+        return [
+            {
+                "name": template.value,
+                "description": self._get_template_description(template),
+                "type": self._get_template_type(template),
+            }
+            for template in ConfigTemplate
+        ]
+
+    def _get_template_description(self, template: ConfigTemplate) -> str:
+        """Get human-readable description of template"""
+        descriptions = {
+            ConfigTemplate.BASIC_SERVER: "MCP server configuration with authentication support",
+            ConfigTemplate.SIMPLE_SUITE: "Compliance testing for MCP protocol conformance",
+            ConfigTemplate.SECURITY_SUITE: "Security testing scenarios with auth and validation tests",
+            ConfigTemplate.WORKFLOW_SUITE: "Multi-turn conversation workflows and context tests",
+        }
+        return descriptions.get(template, "Configuration template")
+
+    def _get_template_type(self, template: ConfigTemplate) -> str:
+        """Get the type of configuration template"""
+        if "server" in template.value:
+            return "server"
+        elif "suite" in template.value:
+            return "suite"
+        else:
+            return "general"
+
+    def get_update_config(self) -> dict:
+        """Get version update check configuration"""
+        default_config = {
+            "enabled": True,
+            "check_interval_days": 7,
+            "show_prerelease": False,
+            "last_notification": None,
+            "notification_cooldown_hours": 24,
+        }
+
+        try:
+            config_path = self.get_config_path("update_config.json")
+            if config_path.exists():
+                with open(config_path) as f:
+                    user_config = json.load(f)
+                    # Merge with defaults
+                    default_config.update(user_config)
+        except Exception:
+            pass  # Use defaults on error
+
+        return default_config
+
+    def save_update_config(self, config: dict):
+        """Save version update check configuration"""
+        try:
+            config_path = self.get_config_path("update_config.json")
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2)
+        except Exception:
+            pass  # Fail silently
+
+    def should_check_for_updates(self) -> bool:
+        """Determine if version checking should run"""
+        # Check environment variables for opt-out
+        import os
+
+        if os.environ.get("NO_UPDATE_NOTIFIER"):
+            return False
+
+        if os.environ.get("CI"):
+            return False
+
+        # Check TTY (don't show in non-interactive sessions)
+        import sys
+
+        if not sys.stdout.isatty():
+            return False
+
+        # Check user configuration
+        config = self.get_update_config()
+        return config.get("enabled", True)
+
+
+# Global config manager instance
+config_manager = ConfigManager()

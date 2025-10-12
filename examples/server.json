@@ -1,0 +1,8 @@
+{
+  "type": "url",
+  "url": "https://no-auth-server.courier-mcp.authed-qukc4.ryvn.run/mcp/",
+  "name": "hackernews_mcp_server",
+  "tool_configuration": {
+    "enabled": true
+  }
+}

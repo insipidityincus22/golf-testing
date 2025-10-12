@@ -1,0 +1,139 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-testing"
+version = "0.1.0"
+description = "Local testing framework for MCP (Model Context Protocol) servers"
+authors = [
+    {name = "MCP Testing Framework", email = "info@golf-mcp.com"}
+]
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers", 
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+]
+keywords = ["mcp", "testing", "ai", "claude", "protocol", "cli", "local"]
+
+# Minimal dependencies for standalone CLI tool
+dependencies = [
+    "pydantic>=2.0.0",
+    "anthropic>=0.40.0",
+    "openai>=1.0.0", 
+    "httpx>=0.25.0",
+    "click>=8.0.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
+    "PyYAML>=6.0.0",  # For configuration file handling
+    "mcp>=1.0.0",  # Official MCP Python SDK for compliance testing
+    "PyJWT>=2.8.0",  # For OAuth JWT token creation and validation in testing
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-httpx>=0.21.0",  # For HTTP mocking in compliance tests
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+]
+ci = [
+    "pytest-cov>=4.0.0",
+    "pytest-xdist>=3.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/golf-mcp/golf-testing"
+Documentation = "https://github.com/golf-mcp/golf-testing#readme"
+Repository = "https://github.com/golf-mcp/golf-testing"
+"Bug Tracker" = "https://github.com/golf-mcp/golf-testing/issues"
+
+# CLI entry points
+[project.scripts]
+mcp-t = "test_mcp.cli.main:mcpt_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["test_mcp*"]
+
+[tool.setuptools.package-data]
+"test_mcp" = ["templates/*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "B", "C4", "UP"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+warn_unused_ignores = false
+# Allow more flexibility for complex codebases  
+allow_untyped_calls = true
+allow_untyped_defs = true
+no_implicit_optional = false
+# Disable strict checks that are causing issues
+disable_error_code = [
+    "assignment",
+    "attr-defined", 
+    "union-attr",
+    "arg-type",
+    "operator",
+    "index",
+    "call-arg",
+    "import-untyped",
+    "dict-item"
+]
+exclude = [
+    "venv/",
+    ".venv/", 
+    "build/",
+    "dist/",
+]
+
+# Handle MCP SDK and external dependencies with pattern matching issues
+[[tool.mypy.overrides]]
+module = [
+    "mcp.*",
+    "anthropic.*", 
+    "openai.*",
+]
+ignore_errors = true
+ignore_missing_imports = true
+
+# Specifically ignore MCP client session pattern matching issues (Python 3.10+ syntax)
+[[tool.mypy.overrides]]
+module = "mcp.client.session"
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
