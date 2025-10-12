@@ -3,7 +3,7 @@ import re
 from contextlib import AsyncExitStack
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -59,7 +59,7 @@ class SecurityTestResult(BaseTestResult):
     evidence: list[str] = Field(
         default_factory=list, description="Evidence of vulnerability"
     )
-    attack_vector: Optional[str] = Field(default=None, description="Attack vector used")
+    attack_vector: str | None = Field(default=None, description="Attack vector used")
 
     def set_execution_time_ms(self, time_ms: float):
         """Set execution time in milliseconds (converts to seconds for BaseTestResult)"""
@@ -97,7 +97,7 @@ class MCPSecurityTester:
     def __init__(
         self,
         server_config: dict[str, Any],
-        progress_tracker: Optional[ProgressTracker] = None,
+        progress_tracker: ProgressTracker | None = None,
         auth_required: bool = False,
         include_penetration_tests: bool = False,
     ):
@@ -108,7 +108,7 @@ class MCPSecurityTester:
         self.include_penetration_tests = include_penetration_tests
 
         # Add MCP session management
-        self.session: Optional[ClientSession] = None
+        self.session: ClientSession | None = None
         self.exit_stack = AsyncExitStack()
         self.available_tools: list = []
         self.available_resources: list = []
@@ -162,7 +162,7 @@ class MCPSecurityTester:
         finally:
             self.session = None
 
-    async def _connect_with_oauth(self, auth_token: Optional[str] = None) -> bool:
+    async def _connect_with_oauth(self, auth_token: str | None = None) -> bool:
         """Establish MCP connection with OAuth token"""
         try:
             # Check if streamablehttp_client supports auth headers
@@ -276,7 +276,7 @@ class MCPSecurityTester:
             self.available_resources = []
 
     async def run_security_assessment(
-        self, categories: Optional[list[SecurityCategory]] = None
+        self, categories: list[SecurityCategory] | None = None
     ) -> SecurityReport:
         """Run comprehensive MCP security assessment using SDK"""
         if self.progress_tracker:
@@ -400,7 +400,7 @@ class MCPSecurityTester:
         return results
 
     async def _run_oauth_tests(
-        self, categories: Optional[list[SecurityCategory]] = None
+        self, categories: list[SecurityCategory] | None = None
     ) -> list[SecurityTestResult]:
         """Run OAuth and authentication tests through MCP protocol"""
         results = []
@@ -472,7 +472,7 @@ class MCPSecurityTester:
                 success=False,
                 severity="high",
                 vulnerability_detected=False,
-                evidence=[f"OAuth testing failed: {str(e)}"],
+                evidence=[f"OAuth testing failed: {e!s}"],
                 attack_vector="OAuth testing framework",
                 error_message=str(e),
                 error_type=ErrorType.EXECUTION,
@@ -514,7 +514,7 @@ class MCPSecurityTester:
 
                     # Tool handled large input successfully
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     vulnerability_detected = True
                     evidence.append(f"Server timeout with {len(payload)} byte payload")
 
@@ -523,7 +523,7 @@ class MCPSecurityTester:
                     if "500" in str(e) or "server error" in str(e).lower():
                         vulnerability_detected = True
                         evidence.append(
-                            f"Server error with {len(payload)} byte payload: {str(e)}"
+                            f"Server error with {len(payload)} byte payload: {e!s}"
                         )
 
             end_time = datetime.now()
@@ -606,7 +606,7 @@ class MCPSecurityTester:
                     # Tool should handle or reject malformed params gracefully
                     evidence.append(f"Tool accepted malformed parameters {i + 1}")
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     vulnerability_detected = True
                     evidence.append(f"Server timeout with malformed parameters {i + 1}")
 
@@ -820,7 +820,6 @@ class MCPSecurityTester:
         try:
             # Create tokens with different scopes
             read_only_token = self._create_jwt_with_scopes(["mcp:read"])
-            # write_token = self._create_jwt_with_scopes(["mcp:read", "mcp:write"])  # Future use
             no_scope_token = self._create_jwt_with_scopes([])
 
             # Test read-only token
