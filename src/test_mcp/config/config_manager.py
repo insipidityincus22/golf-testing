@@ -2,7 +2,7 @@ import json
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
@@ -11,32 +11,49 @@ from ..models.compliance import ComplianceTestConfig, ComplianceTestSuite
 from ..models.conversational import ConversationalTestConfig, ConversationTestSuite
 from ..models.factory import TestSuiteFactory, TestSuiteType
 from ..models.security import SecurityTestConfig, SecurityTestSuite
+from ..shared.file_utils import ensure_directory, safe_json_dump
 
 
 class MCPServerConfig(BaseModel):
     """Type-safe MCP server configuration"""
 
     name: str = Field(..., description="Server name identifier")
-    type: str = Field(default="url", description="Server connection type")
-    url: Optional[str] = Field(
-        default=None, description="Server URL for HTTP connections"
+    transport: str = Field(
+        default="http", description="Transport type: 'http' or 'stdio'"
     )
-    command: Optional[str] = Field(
-        default=None, description="Command for subprocess servers"
+    url: str | None = Field(
+        default=None,
+        description="Server URL for HTTP connections (required for HTTP transport)",
     )
-    args: Optional[list[str]] = Field(
-        default=None, description="Arguments for subprocess servers"
+    command: str | None = Field(
+        default=None,
+        description="Command to run server for stdio transport (e.g., 'npx -y @modelcontextprotocol/server-time')",
     )
-    env: Optional[dict[str, str]] = Field(
-        default=None, description="Environment variables"
+    env: dict[str, str] | None = Field(
+        default=None,
+        description="Environment variables for stdio transport (e.g., {'API_KEY': 'value'})",
     )
-    tool_configuration: Optional[dict[str, Any]] = Field(
-        default_factory=lambda: {"enabled": True},
-        description="Tool configuration settings",
+    cwd: str | None = Field(
+        default=None,
+        description="Working directory for stdio transport (e.g., '/path/to/server')",
     )
-    authorization_token: Optional[str] = Field(
+    authorization_token: str | None = Field(
         default=None, description="Authorization token for server access"
     )
+    oauth: bool = Field(default=False, description="Enable OAuth authentication")
+
+    def model_post_init(self, __context):
+        """Validate transport-specific requirements"""
+        if self.transport == "http":
+            if not self.url:
+                raise ValueError("url is required for HTTP transport")
+        elif self.transport == "stdio":
+            if not self.command:
+                raise ValueError("command is required for stdio transport")
+        elif self.transport not in ["http", "stdio"]:
+            raise ValueError(
+                f"Invalid transport: {self.transport}. Must be 'http' or 'stdio'"
+            )
 
 
 class ConfigTemplate(str, Enum):
@@ -109,98 +126,109 @@ class ConfigManager:
             system_paths["data_dir"],
             system_paths["cache_dir"],
         ]:
-            path.mkdir(parents=True, exist_ok=True)
+            ensure_directory(path)
 
     def _load_templates(self) -> dict[str, dict[str, Any]]:
         """Load built-in configuration templates"""
         return {
             ConfigTemplate.BASIC_SERVER: {
-                "type": "url",
                 "url": "${MCP_SERVER_URL}",
                 "name": "${MCP_SERVER_NAME:-My MCP Server}",
-                "tool_configuration": {"enabled": True},
                 "authorization_token": "${MCP_AUTH_TOKEN:-}",
             },
             ConfigTemplate.SIMPLE_SUITE: {
-                "suite_id": "${SUITE_ID:-simple_test_suite}",
-                "name": "${SUITE_NAME:-Simple MCP Test Suite}",
-                "description": "${SUITE_DESCRIPTION:-Basic functionality testing}",
-                "test_type": "basic",
+                "suite_id": "${SUITE_ID:-compliance_test_suite}",
+                "name": "${SUITE_NAME:-MCP Compliance Test Suite}",
+                "description": "${SUITE_DESCRIPTION:-MCP protocol compliance testing}",
+                "suite_type": "compliance",
                 "parallelism": 3,
                 "test_cases": [
                     {
-                        "test_id": "greeting_test",
-                        "user_message": "Hello! Can you help me?",
-                        "success_criteria": "Agent should respond politely and offer assistance",
-                        "timeout_seconds": 60,
+                        "test_id": "protocol_handshake",
+                        "protocol_version": "2025-06-18",
+                        "check_categories": ["handshake"],
                         "metadata": {
-                            "category": "basic_interaction",
+                            "category": "protocol",
                             "priority": "high",
                         },
                     },
                     {
-                        "test_id": "capability_discovery",
-                        "user_message": "What tools or capabilities do you have?",
-                        "success_criteria": "Agent should list available tools and their purposes",
-                        "timeout_seconds": 90,
+                        "test_id": "capabilities_discovery",
+                        "protocol_version": "2025-06-18",
+                        "check_categories": ["capabilities"],
                         "metadata": {"category": "capabilities", "priority": "high"},
                     },
+                    {
+                        "test_id": "tool_enumeration",
+                        "protocol_version": "2025-06-18",
+                        "check_categories": ["tools"],
+                        "metadata": {"category": "tools", "priority": "medium"},
+                    },
                 ],
+                "auth_required": False,
+                "strict_mode": True,
                 "created_at": "${CURRENT_TIMESTAMP:-2024-01-01T00:00:00Z}",
             },
             ConfigTemplate.SECURITY_SUITE: {
                 "suite_id": "${SUITE_ID:-security_test_suite}",
-                "name": "${SUITE_NAME:-Security Test Suite}",
-                "description": "${SUITE_DESCRIPTION:-Security testing scenarios}",
-                "test_type": "security",
+                "name": "${SUITE_NAME:-MCP Security Test Suite}",
+                "description": "${SUITE_DESCRIPTION:-MCP security and authentication testing}",
+                "suite_type": "security",
                 "parallelism": 2,
                 "test_cases": [
                     {
                         "test_id": "auth_validation",
-                        "user_message": "Test authentication mechanisms",
-                        "success_criteria": "Proper authentication handling",
-                        "timeout_seconds": 90,
+                        "auth_method": "oauth",
+                        "rate_limit_threshold": 100,
+                        "vulnerability_checks": ["auth"],
+                        "severity_threshold": "medium",
                         "metadata": {"category": "authentication", "priority": "high"},
                     },
                     {
                         "test_id": "rate_limiting",
-                        "user_message": "Test rate limiting behavior",
-                        "success_criteria": "Rate limits enforced correctly",
-                        "timeout_seconds": 120,
+                        "auth_method": "token",
+                        "rate_limit_threshold": 50,
+                        "vulnerability_checks": ["rate_limit"],
+                        "severity_threshold": "medium",
                         "metadata": {"category": "rate_limiting", "priority": "medium"},
                     },
                     {
-                        "test_id": "input_validation",
-                        "user_message": "Send malformed input to test validation",
-                        "success_criteria": "Invalid input rejected gracefully",
-                        "timeout_seconds": 60,
+                        "test_id": "injection_testing",
+                        "auth_method": "oauth",
+                        "rate_limit_threshold": 100,
+                        "vulnerability_checks": ["injection"],
+                        "severity_threshold": "high",
                         "metadata": {
                             "category": "input_validation",
                             "priority": "high",
                         },
                     },
                 ],
+                "auth_required": True,
+                "include_penetration_tests": False,
                 "created_at": "${CURRENT_TIMESTAMP:-2024-01-01T00:00:00Z}",
             },
             ConfigTemplate.WORKFLOW_SUITE: {
-                "suite_id": "${SUITE_ID:-workflow_test_suite}",
-                "name": "${SUITE_NAME:-Workflow Test Suite}",
-                "description": "${SUITE_DESCRIPTION:-Multi-turn conversation workflows}",
-                "test_type": "workflow",
+                "suite_id": "${SUITE_ID:-conversational_test_suite}",
+                "name": "${SUITE_NAME:-Conversational Test Suite}",
+                "description": "${SUITE_DESCRIPTION:-Multi-turn conversation testing}",
+                "suite_type": "conversational",
                 "parallelism": 1,
                 "test_cases": [
                     {
                         "test_id": "multi_turn_conversation",
-                        "user_message": "Start complex multi-step task",
+                        "user_message": "Start a complex multi-step task with me",
                         "success_criteria": "Maintains context across multiple interactions",
-                        "timeout_seconds": 180,
+                        "max_turns": 10,
+                        "context_persistence": True,
                         "metadata": {"category": "conversation", "priority": "high"},
                     },
                     {
                         "test_id": "error_recovery",
-                        "user_message": "Trigger error and test recovery",
+                        "user_message": "Let's try something that might cause an error",
                         "success_criteria": "Graceful error handling and recovery",
-                        "timeout_seconds": 120,
+                        "max_turns": 5,
+                        "context_persistence": True,
                         "metadata": {
                             "category": "error_handling",
                             "priority": "medium",
@@ -208,12 +236,15 @@ class ConfigManager:
                     },
                     {
                         "test_id": "context_persistence",
-                        "user_message": "Reference earlier conversation details",
-                        "success_criteria": "Maintains conversation context",
-                        "timeout_seconds": 90,
+                        "user_message": "Remember what we discussed earlier",
+                        "success_criteria": "Maintains conversation context across turns",
+                        "max_turns": 8,
+                        "context_persistence": True,
                         "metadata": {"category": "context", "priority": "high"},
                     },
                 ],
+                "user_patience_level": "medium",
+                "conversation_style": "natural",
                 "created_at": "${CURRENT_TIMESTAMP:-2024-01-01T00:00:00Z}",
             },
         }
@@ -223,8 +254,7 @@ class ConfigManager:
         system_paths = self.paths.get_system_paths()
         config_path = system_paths["servers_dir"] / f"{server_id}.json"
 
-        with open(config_path, "w") as f:
-            json.dump(server_config, f, indent=2)
+        safe_json_dump(server_config, config_path, "saving server configuration")
 
         return config_path
 
@@ -239,8 +269,7 @@ class ConfigManager:
 
             suite_config["created_at"] = datetime.now().isoformat()
 
-        with open(config_path, "w") as f:
-            json.dump(suite_config, f, indent=2)
+        safe_json_dump(suite_config, config_path, "saving suite configuration")
 
         return config_path
 
@@ -264,8 +293,7 @@ class ConfigManager:
             elif test_suite.__class__.__name__ == "ConversationTestSuite":
                 suite_data["suite_type"] = "conversational"
 
-        with open(config_path, "w") as f:
-            json.dump(suite_data, f, indent=2)
+        safe_json_dump(suite_data, config_path, "saving suite data")
 
         return config_path
 
@@ -278,7 +306,7 @@ class ConfigManager:
             test_cases=[
                 ComplianceTestConfig(
                     test_id="protocol_handshake",
-                    protocol_version="1.0",
+                    protocol_version="2025-06-18",
                     check_categories=["handshake"],
                 ),
                 ComplianceTestConfig(
@@ -289,7 +317,6 @@ class ConfigManager:
                 ),
                 ComplianceTestConfig(
                     test_id="oauth_flow",
-                    oauth_config={"flow": "authorization_code"},
                     check_categories=["auth"],
                 ),
             ],
@@ -368,7 +395,7 @@ class ConfigManager:
                     return MCPServerConfig(**config_data)
                 except Exception as e:
                     raise ValueError(
-                        f"Error loading server '{server_id}': {str(e)}\n"
+                        f"Error loading server '{server_id}': {e!s}\n"
                         f"The configuration file may be corrupted or have invalid format."
                     ) from e
 
@@ -389,26 +416,41 @@ class ConfigManager:
         """Load test suite by ID using type-safe models, checking local first."""
         return self.load_test_suite(suite_id)
 
-    def load_test_suite(self, suite_id: str) -> TestSuiteType:
-        """Load test suite with appropriate type-specific model"""
+    def _load_suite_config_with_error_handling(self, suite_id: str) -> dict[str, Any]:
+        """Load suite config with helpful error messages"""
         try:
-            config_data = self._load_suite_config(suite_id)
+            return self._load_suite_config(suite_id)
         except FileNotFoundError:
-            available_suites = [
-                f.stem
-                for path in self.paths.get_all_paths()["suites_dirs"]
-                for f in path.glob("*.json")
-                if f.is_file()
-            ]
+            available_suites = self._get_available_suite_ids()
             raise ValueError(
                 f"Test suite '{suite_id}' not found.\n"
                 f"Available suites: {', '.join(available_suites) if available_suites else 'none'}\n"
                 f"Create a new suite with: mcp-t create suite"
             ) from None
 
-        # Determine suite type from config or filename
-        suite_type = config_data.get("suite_type") or self._infer_suite_type(suite_id)
+    def _get_available_suite_ids(self) -> list[str]:
+        """Get list of available suite IDs for error messages"""
+        return [
+            f.stem
+            for path in self.paths.get_all_paths()["suites_dirs"]
+            for f in path.glob("*.json")
+            if f.is_file()
+        ]
 
+    def load_test_suite(self, suite_id: str) -> TestSuiteType:
+        """Load test suite with appropriate type-specific model"""
+        config_data = self._load_suite_config_with_error_handling(suite_id)
+        suite_type = self._determine_suite_type(config_data, suite_id)
+        return self._create_typed_suite(suite_id, suite_type, config_data)
+
+    def _determine_suite_type(self, config_data: dict[str, Any], suite_id: str) -> str:
+        """Determine suite type from config or filename"""
+        return config_data.get("suite_type") or self._infer_suite_type(suite_id)
+
+    def _create_typed_suite(
+        self, suite_id: str, suite_type: str, config_data: dict[str, Any]
+    ) -> TestSuiteType:
+        """Create typed suite with proper error handling"""
         try:
             return TestSuiteFactory.create_suite(suite_type, config_data)
         except Exception as e:
@@ -420,11 +462,11 @@ class ConfigManager:
                     f"Test suite '{suite_id}' has an incompatible format.\n"
                     f"This may be an older configuration that needs updating.\n"
                     f"Try creating a new {suite_type} suite with: mcp-t create suite\n"
-                    f"Original error: {str(e)}"
+                    f"Original error: {e!s}"
                 ) from e
             else:
                 raise ValueError(
-                    f"Error loading test suite '{suite_id}': {str(e)}"
+                    f"Error loading test suite '{suite_id}': {e!s}"
                 ) from None
 
     def _load_suite_config(self, suite_id: str) -> dict[str, Any]:
@@ -477,7 +519,6 @@ class ConfigManager:
                     servers[server_id] = {
                         "name": config.get("name", server_id),
                         "url": config.get("url", ""),
-                        "type": config.get("type", "url"),
                         "source": source,
                         "path": str(server_file),
                     }
@@ -547,7 +588,7 @@ class ConfigManager:
         self,
         template_type: ConfigTemplate,
         output_path: str,
-        substitutions: Optional[dict[str, str]] = None,
+        substitutions: dict[str, str] | None = None,
     ) -> Path:
         """Create configuration file from template with environment variable substitution"""
         template_data = self.templates[template_type].copy()
@@ -573,7 +614,7 @@ class ConfigManager:
             expanded_data = json.loads(expanded_json)
 
         output_file = Path(output_path)
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+        ensure_directory(output_file.parent)
 
         # Determine format from extension
         if (
@@ -616,180 +657,6 @@ class ConfigManager:
         else:
             return data
 
-    def validate_config(
-        self, config_path: str, config_type: str = "auto"
-    ) -> dict[str, Any]:
-        """Validate configuration file and return validation results"""
-        config_file = Path(config_path)
-
-        if not config_file.exists():
-            return {
-                "valid": False,
-                "errors": [f"Configuration file not found: {config_file}"],
-                "warnings": [],
-            }
-
-        try:
-            # Load configuration
-            with open(config_file) as f:
-                if config_file.suffix.lower() in [".yaml", ".yml"]:
-                    config_data = yaml.safe_load(f)
-                else:
-                    config_data = json.load(f)
-
-            # Auto-detect configuration type
-            if config_type == "auto":
-                config_type = self._detect_config_type(config_data)
-
-            # Validate based on type
-            errors = []
-            warnings = []
-
-            if config_type == "server":
-                try:
-                    MCPServerConfig(**config_data)
-                except Exception as e:
-                    errors.append(f"Server configuration validation error: {str(e)}")
-            elif config_type == "suite":
-                try:
-                    # Validate using type-safe suite creation
-                    suite_type = config_data.get("suite_type", "conversational")
-                    TestSuiteFactory.create_suite(suite_type, config_data)
-                except Exception as e:
-                    errors.append(
-                        f"Test suite configuration validation error: {str(e)}"
-                    )
-
-            # Check for common issues
-            warnings.extend(self._check_common_issues(config_data, config_type))
-
-            return {
-                "valid": len(errors) == 0,
-                "errors": errors,
-                "warnings": warnings,
-                "config_type": config_type,
-                "environment_variables": self._extract_env_vars(config_data),
-            }
-
-        except Exception as e:
-            return {
-                "valid": False,
-                "errors": [f"Failed to parse configuration: {str(e)}"],
-                "warnings": [],
-            }
-
-    def _detect_config_type(self, config_data: dict[str, Any]) -> str:
-        """Auto-detect configuration type"""
-        if "test_cases" in config_data or "suite_id" in config_data:
-            return "suite"
-        elif "url" in config_data or "type" in config_data:
-            return "server"
-        else:
-            return "unknown"
-
-    def _check_common_issues(
-        self, config_data: dict[str, Any], config_type: str
-    ) -> list[str]:
-        """Check for common configuration issues"""
-        warnings = []
-
-        if config_type == "server":
-            # Check for missing environment variables
-            if isinstance(config_data.get("url"), str) and "${" in config_data["url"]:
-                if not self._env_var_exists(config_data["url"]):
-                    warnings.append(
-                        "Server URL contains undefined environment variables"
-                    )
-
-        elif config_type == "suite":
-            # Check parallelism
-            parallelism = config_data.get("parallelism", 1)
-            test_count = len(config_data.get("test_cases", []))
-            if parallelism > test_count:
-                warnings.append(
-                    f"Parallelism ({parallelism}) exceeds test count ({test_count})"
-                )
-
-            # Check for very long timeouts
-            for test_case in config_data.get("test_cases", []):
-                timeout = test_case.get("timeout_seconds", 60)
-                if timeout > 300:
-                    warnings.append(
-                        f"Test '{test_case.get('test_id', 'unknown')}' has very long timeout ({timeout}s)"
-                    )
-
-        return warnings
-
-    def _env_var_exists(self, text: str) -> bool:
-        """Check if environment variables in text are defined"""
-        import re
-
-        env_vars = re.findall(r"\$\{([^}:]+)", text)
-        return all(var in os.environ for var in env_vars)
-
-    def _extract_env_vars(self, data: Any) -> list[str]:
-        """Extract all environment variable references from configuration"""
-        import re
-
-        env_vars = set()
-
-        def extract_from_value(value):
-            if isinstance(value, str):
-                matches = re.findall(r"\$\{([^}:]+)", value)
-                env_vars.update(matches)
-            elif isinstance(value, dict):
-                for v in value.values():
-                    extract_from_value(v)
-            elif isinstance(value, list):
-                for item in value:
-                    extract_from_value(item)
-
-        extract_from_value(data)
-        return sorted(env_vars)
-
-    def get_config_path(self, config_name: str, config_type: str = "config") -> Path:
-        """Get organized path for configuration file"""
-        system_paths = self.paths.get_system_paths()
-
-        if config_type == "config":
-            return system_paths["config_dir"] / config_name
-        elif config_type == "data":
-            return system_paths["data_dir"] / config_name
-        elif config_type == "cache":
-            return system_paths["cache_dir"] / config_name
-        else:
-            raise ValueError(f"Invalid config type: {config_type}")
-
-    def list_templates(self) -> list[dict[str, Any]]:
-        """List available configuration templates"""
-        return [
-            {
-                "name": template.value,
-                "description": self._get_template_description(template),
-                "type": self._get_template_type(template),
-            }
-            for template in ConfigTemplate
-        ]
-
-    def _get_template_description(self, template: ConfigTemplate) -> str:
-        """Get human-readable description of template"""
-        descriptions = {
-            ConfigTemplate.BASIC_SERVER: "MCP server configuration with authentication support",
-            ConfigTemplate.SIMPLE_SUITE: "Compliance testing for MCP protocol conformance",
-            ConfigTemplate.SECURITY_SUITE: "Security testing scenarios with auth and validation tests",
-            ConfigTemplate.WORKFLOW_SUITE: "Multi-turn conversation workflows and context tests",
-        }
-        return descriptions.get(template, "Configuration template")
-
-    def _get_template_type(self, template: ConfigTemplate) -> str:
-        """Get the type of configuration template"""
-        if "server" in template.value:
-            return "server"
-        elif "suite" in template.value:
-            return "suite"
-        else:
-            return "general"
-
     def get_update_config(self) -> dict:
         """Get version update check configuration"""
         default_config = {
@@ -801,7 +668,9 @@ class ConfigManager:
         }
 
         try:
-            config_path = self.get_config_path("update_config.json")
+            config_path = (
+                self.paths.get_system_paths()["config_dir"] / "update_config.json"
+            )
             if config_path.exists():
                 with open(config_path) as f:
                     user_config = json.load(f)
@@ -815,8 +684,10 @@ class ConfigManager:
     def save_update_config(self, config: dict):
         """Save version update check configuration"""
         try:
-            config_path = self.get_config_path("update_config.json")
-            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path = (
+                self.paths.get_system_paths()["config_dir"] / "update_config.json"
+            )
+            ensure_directory(config_path.parent)
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=2)
         except Exception:
