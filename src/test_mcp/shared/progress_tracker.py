@@ -2,7 +2,7 @@ import asyncio
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from rich.progress import (
     BarColumn,
@@ -24,7 +24,7 @@ class TestProgress:
     test_id: str
     test_type: TestType
     status: TestStatus = TestStatus.QUEUED
-    start_time: Optional[datetime] = None
+    start_time: datetime | None = None
 
     # Generic progress tracking
     current_step: int = 0
@@ -32,8 +32,8 @@ class TestProgress:
     step_description: str = ""
 
     # Type-specific details (extensible)
-    details: Optional[dict[str, Any]] = None
-    error_message: Optional[str] = None
+    details: dict[str, Any] | None = None
+    error_message: str | None = None
 
     def __post_init__(self) -> None:
         if self.details is None:
@@ -44,7 +44,7 @@ class ProgressTracker:
     """Progress tracking for all test types"""
 
     def __init__(
-        self, total_tests: int, parallelism: int, test_types: Optional[list[str]] = None
+        self, total_tests: int, parallelism: int, test_types: list[str] | None = None
     ):
         self.console = get_console().console
         self.total_tests = total_tests
@@ -189,7 +189,7 @@ class ProgressTracker:
         return table
 
     def add_test_type_support(
-        self, test_type: str, step_names: Optional[list[str]] = None
+        self, test_type: str, step_names: list[str] | None = None
     ) -> None:
         """Extend progress tracker to support new test types"""
         if test_type not in self.test_types:
