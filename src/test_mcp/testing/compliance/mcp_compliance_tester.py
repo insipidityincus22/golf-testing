@@ -1,7 +1,7 @@
 import asyncio
 from contextlib import AsyncExitStack
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -24,9 +24,9 @@ except ImportError:
 class MCPServerInfo(BaseModel):
     """MCP server information extracted from connection"""
 
-    protocol_version: Optional[str] = None
-    server_name: Optional[str] = None
-    server_version: Optional[str] = None
+    protocol_version: str | None = None
+    server_name: str | None = None
+    server_version: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     tools: list[dict[str, Any]] = Field(default_factory=list)
     resources: list[dict[str, Any]] = Field(default_factory=list)
@@ -51,7 +51,7 @@ class MCPComplianceTestResult(BaseTestResult):
     message: str = Field(..., description="Test result message")
 
     # Protocol details
-    server_info: Optional[MCPServerInfo] = Field(
+    server_info: MCPServerInfo | None = Field(
         default=None, description="Extracted server information"
     )
     compliance_passed: bool = Field(
@@ -65,16 +65,16 @@ class MCPComplianceTester:
     def __init__(
         self,
         server_config: dict[str, Any],
-        progress_tracker: Optional[ProgressTracker] = None,
+        progress_tracker: ProgressTracker | None = None,
     ):
         self.server_config = server_config
         self.progress_tracker = progress_tracker
-        self.server_info: Optional[MCPServerInfo] = None
-        self.session: Optional[ClientSession] = None
+        self.server_info: MCPServerInfo | None = None
+        self.session: ClientSession | None = None
         self.exit_stack = AsyncExitStack()
 
     async def run_compliance_tests(
-        self, check_categories: Optional[list[str]] = None
+        self, check_categories: list[str] | None = None
     ) -> list[MCPComplianceTestResult]:
         """Run comprehensive MCP protocol compliance tests using MCP SDK"""
         results = []
@@ -193,7 +193,7 @@ class MCPComplianceTester:
                 check_name="MCP Connection",
                 category="Protocol",
                 severity="critical",
-                message=f"Failed to connect to MCP server: {str(e)}",
+                message=f"Failed to connect to MCP server: {e!s}",
                 start_time=datetime.now(),
                 end_time=datetime.now(),
                 status=TestStatus.FAILED,
@@ -311,7 +311,7 @@ class MCPComplianceTester:
                 check_name="Protocol Handshake",
                 category="Protocol",
                 severity="critical",
-                message=f"MCP protocol handshake failed: {str(e)}",
+                message=f"MCP protocol handshake failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -413,7 +413,7 @@ class MCPComplianceTester:
                 check_name="Capability Negotiation",
                 category="Protocol",
                 severity="high",
-                message=f"Capability negotiation test failed: {str(e)}",
+                message=f"Capability negotiation test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -462,7 +462,7 @@ class MCPComplianceTester:
                 check_name="Tool Discovery",
                 category="Tools",
                 severity="medium",
-                message=f"Tool discovery test failed: {str(e)}",
+                message=f"Tool discovery test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -517,7 +517,7 @@ class MCPComplianceTester:
                 check_name="Resource Discovery",
                 category="Resources",
                 severity="medium",
-                message=f"Resource discovery test failed: {str(e)}",
+                message=f"Resource discovery test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -568,7 +568,7 @@ class MCPComplianceTester:
                 check_name="Prompt Discovery",
                 category="Prompts",
                 severity="medium",
-                message=f"Prompt discovery test failed: {str(e)}",
+                message=f"Prompt discovery test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -633,7 +633,7 @@ class MCPComplianceTester:
                 check_name="Roots Discovery",
                 category="Resources",
                 severity="info",  # Optional capability
-                message=f"Roots discovery test failed: {str(e)}",
+                message=f"Roots discovery test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -704,7 +704,7 @@ class MCPComplianceTester:
                 check_name="Resource Templates Discovery",
                 category="Resources",
                 severity="info",  # Optional capability
-                message=f"Resource templates discovery test failed: {str(e)}",
+                message=f"Resource templates discovery test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -814,7 +814,7 @@ class MCPComplianceTester:
                 check_name="Tool Execution",
                 category="Tools",
                 severity="high",
-                message=f"Tool execution test failed: {str(e)}",
+                message=f"Tool execution test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -964,7 +964,7 @@ class MCPComplianceTester:
             except Exception as resource_error:
                 success = False
                 message = (
-                    f"Resource '{resource_name}' reading failed: {str(resource_error)}"
+                    f"Resource '{resource_name}' reading failed: {resource_error!s}"
                 )
 
             end_time = datetime.now()
@@ -990,7 +990,7 @@ class MCPComplianceTester:
                 check_name="Resource Reading",
                 category="Resources",
                 severity="medium",
-                message=f"Resource reading test failed: {str(e)}",
+                message=f"Resource reading test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -1090,7 +1090,7 @@ class MCPComplianceTester:
                 check_name="Capability Functionality",
                 category="Capabilities",
                 severity="high",
-                message=f"Capability functionality test failed: {str(e)}",
+                message=f"Capability functionality test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -1224,14 +1224,13 @@ class MCPComplianceTester:
                                 issues.append(
                                     f"{test_case['name']}: Invalid JSON response"
                                 )
+                        # Non-200 response
+                        elif not test_case["expect_success"]:
+                            tests_passed += 1  # Expected to fail
                         else:
-                            # Non-200 response
-                            if not test_case["expect_success"]:
-                                tests_passed += 1  # Expected to fail
-                            else:
-                                issues.append(
-                                    f"{test_case['name']}: Unexpected status {response.status_code}"
-                                )
+                            issues.append(
+                                f"{test_case['name']}: Unexpected status {response.status_code}"
+                            )
 
                     except Exception as e:
                         issues.append(f"{test_case['name']}: {str(e)[:50]}")
@@ -1265,7 +1264,7 @@ class MCPComplianceTester:
                 check_name="JSON-RPC 2.0 Compliance",
                 category="Protocol",
                 severity="high",
-                message=f"JSON-RPC compliance test failed: {str(e)}",
+                message=f"JSON-RPC compliance test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -1367,7 +1366,7 @@ class MCPComplianceTester:
                 check_name="Error Handling",
                 category="Protocol",
                 severity="medium",
-                message=f"Error handling test failed: {str(e)}",
+                message=f"Error handling test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -1441,7 +1440,7 @@ class MCPComplianceTester:
                     check_name="Prompt Execution",
                     category="Prompts",
                     severity="low",
-                    message=f"Prompt '{prompt_name}' execution resulted in error (may be expected): {str(prompt_error)}",
+                    message=f"Prompt '{prompt_name}' execution resulted in error (may be expected): {prompt_error!s}",
                     start_time=start_time,
                     end_time=end_time,
                     status=TestStatus.COMPLETED,
@@ -1458,7 +1457,7 @@ class MCPComplianceTester:
                 check_name="Prompt Execution",
                 category="Prompts",
                 severity="medium",
-                message=f"Prompt execution test failed: {str(e)}",
+                message=f"Prompt execution test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -1521,7 +1520,7 @@ class MCPComplianceTester:
                 check_name="Sampling Support",
                 category="Advanced",
                 severity="low",
-                message=f"Sampling support test failed: {str(e)}",
+                message=f"Sampling support test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -1579,7 +1578,7 @@ class MCPComplianceTester:
                 check_name="Elicitation Support",
                 category="Advanced",
                 severity="low",
-                message=f"Elicitation support test failed: {str(e)}",
+                message=f"Elicitation support test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -1640,7 +1639,7 @@ class MCPComplianceTester:
                 check_name="Notification Support",
                 category="Advanced",
                 severity="low",
-                message=f"Notification support test failed: {str(e)}",
+                message=f"Notification support test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
@@ -1708,7 +1707,7 @@ class MCPComplianceTester:
                 check_name="Client Capability Respect",
                 category="Protocol",
                 severity="medium",
-                message=f"Client capability respect test failed: {str(e)}",
+                message=f"Client capability respect test failed: {e!s}",
                 start_time=start_time,
                 end_time=end_time,
                 status=TestStatus.FAILED,
