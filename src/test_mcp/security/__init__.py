@@ -17,7 +17,7 @@ from .security_tester import (
 
 __all__ = [
     "MCPSecurityTester",
-    "SecurityTestResult",
-    "SecurityReport",
     "SecurityCategory",
+    "SecurityReport",
+    "SecurityTestResult",
 ]
