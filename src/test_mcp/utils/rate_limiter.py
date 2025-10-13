@@ -87,16 +87,20 @@ class RateLimiter:
         timeout_cutoff = current_time - 300  # 5 minute absolute timeout
 
         tokens_to_remove = 0
-        entries_to_remove = []
-
-        # First pass: identify entries that can be safely removed
-        for entry in self.request_history[provider]:
+        
+        # Use index-based removal to avoid O(n²) performance and race conditions
+        # Process from right to left to maintain valid indices during removal
+        for i in range(len(self.request_history[provider]) - 1, -1, -1):
+            entry = self.request_history[provider][i]
+            
             if entry[self.TIMESTAMP_INDEX] >= cutoff_time:
-                break  # Rest are newer, stop checking
+                continue  # Entry is still fresh, keep it
 
+            should_remove = False
+            
             # Force cleanup of extremely old requests (5+ minutes)
             if entry[self.TIMESTAMP_INDEX] < timeout_cutoff:
-                entries_to_remove.append(entry)
+                should_remove = True
                 if len(entry) >= self.MIN_ENTRY_WITH_ID:
                     correlation_id = entry[self.CORRELATION_ID_INDEX]
                     if correlation_id in self._pending_requests:
@@ -104,23 +108,25 @@ class RateLimiter:
                             f"Warning: Timing out request {correlation_id} after 5 minutes"
                         )
                         del self._pending_requests[correlation_id]
-                continue
+            else:
+                # Only remove if tokens have been recorded (not pending)
+                if len(entry) >= self.MIN_ENTRY_WITH_ID:
+                    correlation_id = entry[self.CORRELATION_ID_INDEX]
+                    # Skip entries that are still pending token recording
+                    if correlation_id not in self._pending_requests:
+                        should_remove = True
+                else:
+                    # Entry without correlation ID can be safely removed
+                    should_remove = True
 
-            # Only remove if tokens have been recorded (not pending)
-            if len(entry) >= self.MIN_ENTRY_WITH_ID:
-                correlation_id = entry[self.CORRELATION_ID_INDEX]
-                # Skip entries that are still pending token recording
-                if correlation_id in self._pending_requests:
-                    continue
-
-            entries_to_remove.append(entry)
-
-        # Second pass: remove identified entries and count tokens
-        for entry in entries_to_remove:
-            self.request_history[provider].remove(entry)
-            if len(entry) >= self.MIN_ENTRY_WITH_TOKENS:
-                tokens = entry[self.TOKENS_INDEX]
-                tokens_to_remove += tokens
+            if should_remove:
+                # Count tokens before removal
+                if len(entry) >= self.MIN_ENTRY_WITH_TOKENS:
+                    tokens = entry[self.TOKENS_INDEX]
+                    tokens_to_remove += tokens
+                
+                # Remove entry using index (O(1) for deque)
+                del self.request_history[provider][i]
 
         # Remove old tokens from current usage
         self.token_usage[provider] = max(
