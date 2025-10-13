@@ -87,17 +87,17 @@ class RateLimiter:
         timeout_cutoff = current_time - 300  # 5 minute absolute timeout
 
         tokens_to_remove = 0
-        
+
         # Use index-based removal to avoid O(n²) performance and race conditions
         # Process from right to left to maintain valid indices during removal
         for i in range(len(self.request_history[provider]) - 1, -1, -1):
             entry = self.request_history[provider][i]
-            
+
             if entry[self.TIMESTAMP_INDEX] >= cutoff_time:
                 continue  # Entry is still fresh, keep it
 
             should_remove = False
-            
+
             # Force cleanup of extremely old requests (5+ minutes)
             if entry[self.TIMESTAMP_INDEX] < timeout_cutoff:
                 should_remove = True
@@ -124,7 +124,7 @@ class RateLimiter:
                 if len(entry) >= self.MIN_ENTRY_WITH_TOKENS:
                     tokens = entry[self.TOKENS_INDEX]
                     tokens_to_remove += tokens
-                
+
                 # Remove entry using index (O(1) for deque)
                 del self.request_history[provider][i]
 
