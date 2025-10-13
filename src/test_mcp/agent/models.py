@@ -28,6 +28,12 @@ class AgentConfig(BaseModel):
     server_id: str | None = None
     results_upload: ResultsUploadConfig | None = None
 
+    # Context management
+    use_containers: bool = True
+    context_management_enabled: bool = True
+    max_tool_uses_before_cleanup: int = 5
+    keep_recent_tool_uses: int = 2
+
     # Fixed internal parameters (not user configurable)
     @property
     def model(self) -> str:
@@ -89,3 +95,8 @@ class ChatSession(BaseModel):
 
     # NEW: Store tool results separately from conversation text
     tool_results: list[dict[str, Any]] = []
+
+    # Container support
+    container_id: str | None = None
+    use_container_mode: bool = False
+    message_count: int = 0  # Track messages sent to API

@@ -57,10 +57,12 @@ class ClaudeAgent:
             )
 
     def start_new_session(self) -> ChatSession:
-        """Start a new chat session"""
+        """Start a new chat session with container support"""
         session_id = str(uuid.uuid4())
         self.current_session = ChatSession(
-            session_id=session_id, mcp_servers=self.config.mcp_servers
+            session_id=session_id,
+            mcp_servers=self.config.mcp_servers,
+            use_container_mode=self.config.use_containers,
         )
         return self.current_session
 
@@ -106,21 +108,56 @@ class ClaudeAgent:
         return clean_message, tool_results
 
     def _prepare_api_call(self, user_message: str) -> dict[str, Any]:
-        """Extract common API preparation logic for both send and stream methods"""
-        # Add user message to session
+        """Prepare API call with container support"""
+        # Add user message to local session
         self.add_message("user", user_message)
 
-        # Prepare API call parameters
-        messages = self._prepare_messages()
-
-        # Prepare API call
+        # Prepare API parameters
         api_params = {
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
             "temperature": self.config.temperature,
             "system": self.config.system_prompt,
-            "messages": messages,
         }
+
+        if self.config.use_containers and self.current_session:
+            # Container mode: only send new messages
+            if self.current_session.container_id:
+                # Existing container - send only new message
+                api_params["container"] = self.current_session.container_id
+                api_params["messages"] = [{"role": "user", "content": user_message}]
+            else:
+                # First message - create container with full conversation
+                self.current_session.container_id = (
+                    f"session_{self.current_session.session_id}"
+                )
+                api_params["container"] = self.current_session.container_id
+                api_params["messages"] = self._prepare_messages()
+
+            self.current_session.use_container_mode = True
+            self.current_session.message_count += 1
+
+        else:
+            # Legacy mode: send all messages
+            api_params["messages"] = self._prepare_messages()
+
+        # Add context management
+        if self.config.context_management_enabled:
+            api_params["context_management"] = {
+                "edits": [
+                    {
+                        "type": "clear_tool_uses_20250919",
+                        "trigger": {
+                            "type": "tool_uses",
+                            "value": self.config.max_tool_uses_before_cleanup,
+                        },
+                        "keep": {
+                            "type": "tool_uses",
+                            "value": self.config.keep_recent_tool_uses,
+                        },
+                    }
+                ]
+            }
 
         return api_params
 
@@ -252,6 +289,10 @@ class ClaudeAgent:
         try:
             # Call Anthropic API (regular call, no beta, no mcp_servers)
             response = await self._make_api_call_with_retry(api_params)
+
+            # Extract container info from response if available
+            if response.container and self.current_session:
+                self.current_session.container_id = response.container.id
 
             # Extract text response
             assistant_text = self._extract_text_from_response(response)
@@ -512,20 +553,14 @@ class ClaudeAgent:
             if hasattr(self.current_session, "tool_calls"):
                 self.current_session.tool_calls = []
 
-    def cleanup_session_messages(self, keep_last_n: int = 10) -> None:
-        """
-        Clean up session messages to prevent memory leak.
-        Keeps the last N messages to maintain context while preventing unbounded growth.
-        """
-        if self.current_session and len(self.current_session.messages) > keep_last_n:
-            # Keep the last N messages to maintain some context
-            self.current_session.messages = self.current_session.messages[-keep_last_n:]
-
     def reset_session(self) -> None:
-        """Reset the current session completely, clearing all messages and tool results"""
+        """Reset session and clear container"""
         if self.current_session:
+            # Container is automatically cleaned up when not referenced
             self.current_session.messages = []
             self.current_session.tool_results = []
+            self.current_session.container_id = None
+            self.current_session.message_count = 0
 
     def get_session_message_count(self) -> int:
         """Get the current number of messages in the session"""
