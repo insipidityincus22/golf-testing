@@ -139,11 +139,6 @@ class ConversationManager:
                     # Clear tool results from agent session after extracting them
                     agent.clear_tool_results()
 
-                    # Prevent memory leak: clean up session messages periodically
-                    # Keep last 20 messages to maintain context while preventing unbounded growth
-                    if agent.get_session_message_count() > 20:
-                        agent.cleanup_session_messages(keep_last_n=20)
-                        self.logger.debug("Cleaned up session messages (kept last 20)")
 
                     # Also enforce maximum conversation length to prevent runaway conversations
                     if turn_number >= 50:  # Hard limit beyond config max_turns
