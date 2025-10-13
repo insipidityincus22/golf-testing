@@ -23,6 +23,7 @@ class ConversationManager:
         self,
         config: str | AgentConfig | None = None,
         conversation_config: ConversationConfig | None = None,
+        rate_limiter=None,
     ):
         """
         Initialize ConversationManager.
@@ -31,10 +32,12 @@ class ConversationManager:
             config: Either a config file path (str) or AgentConfig object.
                     If None, loads from environment.
             conversation_config: Configuration for conversation behavior.
+            rate_limiter: Optional rate limiter to pass to the agent.
         """
         self.conversation_config = conversation_config or ConversationConfig()
         self.logger = logging.getLogger(__name__)
         self.user_simulator = UserSimulator(self.conversation_config)
+        self.rate_limiter = rate_limiter
 
         # Handle different config types
         if isinstance(config, str):
@@ -91,6 +94,8 @@ class ConversationManager:
 
         # Create fresh agent for conversation
         agent = ClaudeAgent(self.agent_config)
+        # Configure rate limiter
+        agent.rate_limiter = self.rate_limiter
         agent.start_new_session()
 
         try:

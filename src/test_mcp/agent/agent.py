@@ -1,9 +1,10 @@
-import json
+import asyncio
 import time
 import uuid
 from typing import Any
 
 import anthropic
+from anthropic import APIStatusError, RateLimitError
 
 from ..mcp_client.capability_router import MCPCapabilityRouter
 from ..mcp_client.client_manager import MCPClientManager
@@ -21,6 +22,7 @@ class ClaudeAgent:
         self.config = config
         self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
         self.current_session: ChatSession | None = None
+        self.rate_limiter = None  # Initialize rate_limiter attribute
 
         # Initialize MCP client manager
         self.mcp_client = MCPClientManager()
@@ -82,38 +84,6 @@ class ClaudeAgent:
 
         return messages
 
-    def _format_tool_result(self, result_text: str) -> str:
-        """Format tool result JSON like jq - generic and works with any structure"""
-        try:
-            # Try to parse as JSON
-            data = json.loads(result_text)
-
-            # Pretty print with proper indentation, like jq
-            formatted = json.dumps(data, indent=2, ensure_ascii=False)
-
-            # If it's very long, truncate but keep it readable
-            if len(formatted) > 2000:
-                lines = formatted.split("\n")
-                if len(lines) > 50:
-                    # Keep first 40 lines and last 5 lines with a truncation message
-                    truncated = (
-                        lines[:40]
-                        + [f"  ... ({len(lines) - 45} lines truncated) ..."]
-                        + lines[-5:]
-                    )
-                    formatted = "\n".join(truncated)
-                else:
-                    # Just truncate characters but try to end on a complete line
-                    formatted = formatted[:1950] + "\n  ... (truncated) ...\n}"
-
-            return formatted
-
-        except (json.JSONDecodeError, TypeError):
-            # If not valid JSON, return as-is but maybe truncate if very long
-            if len(result_text) > 1000:
-                return result_text[:997] + "..."
-            return result_text
-
     def _process_response_content(
         self, content: list[Any]
     ) -> tuple[str, list[dict[str, Any]]]:
@@ -162,37 +132,65 @@ class ClaudeAgent:
 
     def _should_retry_error(self, error: Exception) -> bool:
         """Determine if an error should be retried"""
+
+        # Handle Anthropic-specific exceptions (most reliable)
+        if isinstance(error, (RateLimitError, APIStatusError)):
+            if isinstance(error, RateLimitError):
+                return True
+            if error.status_code in (429, 529):  # Rate limit and overloaded
+                return True
+
+        # String-based detection for other providers and edge cases
         error_str = str(error).lower()
-
-        # Check for 529 overloaded errors
-        if "529" in error_str or "overloaded" in error_str:
-            return True
-
-        # Check for other retryable errors
-        retryable_errors = [
-            "502",  # Bad Gateway
-            "503",  # Service Unavailable
-            "504",  # Gateway Timeout
+        retryable_patterns = [
+            # Rate limiting
+            "429",
+            "529",
             "rate_limit_error",
+            "overloaded",
+            # Server errors
+            "502",
+            "503",
+            "504",
+            # Connection issues
             "timeout",
             "connection error",
             "server error",
         ]
 
-        return any(retryable in error_str for retryable in retryable_errors)
+        return any(pattern in error_str for pattern in retryable_patterns)
 
-    def _make_api_call_with_retry(self, api_params: dict) -> Any:
+    async def _make_api_call_with_retry(self, api_params: dict) -> Any:
         """Make API call with retry logic for transient errors"""
         max_retries = 3
         base_delay = 1.0  # Start with 1 second
 
         for attempt in range(max_retries + 1):
+            correlation_id = None
             try:
+                # Acquire rate limiting slot before making API call
+                if self.rate_limiter:
+                    correlation_id = await self.rate_limiter.acquire_request_slot(
+                        "anthropic"
+                    )
+
                 # Make API call using regular client (no beta, no MCP servers)
                 response = self.client.messages.create(**api_params)
+
+                # Record actual token usage if rate limiter is configured
+                if self.rate_limiter and response.usage and correlation_id:
+                    total_tokens = (
+                        response.usage.input_tokens + response.usage.output_tokens
+                    )
+                    self.rate_limiter.record_token_usage(correlation_id, total_tokens)
+
                 return response
 
             except Exception as e:
+                # Clean up pending request on error
+                if self.rate_limiter and correlation_id:
+                    self.rate_limiter.cleanup_pending_request(correlation_id)
+
                 # Check if this is the last attempt
                 if attempt == max_retries:
                     raise e
@@ -209,7 +207,7 @@ class ClaudeAgent:
                 )
                 print(f"   Retrying in {delay:.1f}s...")
 
-                time.sleep(delay)
+                await asyncio.sleep(delay)
 
         # This shouldn't be reached, but just in case
         raise Exception("Max retries exceeded")
@@ -253,7 +251,7 @@ class ClaudeAgent:
 
         try:
             # Call Anthropic API (regular call, no beta, no mcp_servers)
-            response = self._make_api_call_with_retry(api_params)
+            response = await self._make_api_call_with_retry(api_params)
 
             # Extract text response
             assistant_text = self._extract_text_from_response(response)
@@ -369,7 +367,7 @@ class ClaudeAgent:
                         ),
                     }
 
-                    continued_response = self._make_api_call_with_retry(
+                    continued_response = await self._make_api_call_with_retry(
                         continued_api_params
                     )
 

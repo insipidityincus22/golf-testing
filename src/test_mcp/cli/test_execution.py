@@ -191,6 +191,11 @@ async def execute_test_cases(
         test_types=[test_type],
     )
 
+    # Initialize rate limiter for API calls
+    from ..utils.rate_limiter import RateLimiter
+
+    rate_limiter = RateLimiter()
+
     # Use Rich Live context for real-time updates (same pattern as enhanced progress)
     with Live(progress_tracker.progress, console=console.console, refresh_per_second=2):
         for _i, test_case_config in enumerate(test_cases, 1):
@@ -210,7 +215,9 @@ async def execute_test_cases(
 
             try:
                 # Execute test using the real engine router (from Phase 1)
-                result = await run_single_test_case(test_case, server_config, verbose)
+                result = await run_single_test_case(
+                    test_case, server_config, verbose, suite_config, rate_limiter
+                )
 
                 if result.get("success", False):
                     successful_tests += 1
@@ -511,6 +518,7 @@ async def run_single_test_case(
     server_config: MCPServerConfig,
     verbose: bool = False,
     suite_config=None,
+    rate_limiter=None,
 ) -> dict:
     """Execute a single test case using real test engines"""
     from ..shared.progress_tracker import ProgressTracker
@@ -552,6 +560,7 @@ async def run_single_test_case(
                 test_id,
                 verbose,
                 suite_config,
+                rate_limiter=rate_limiter,
             )
 
         # Mark completion
@@ -1344,7 +1353,7 @@ def run_with_mcpt_inference(
 
 
 async def run_tests_with_enhanced_progress(
-    suite_config, server_config, verbose: bool = False
+    suite_config, server_config, verbose: bool = False, rate_limiter=None
 ) -> bool:
     """Run tests using real test execution engines with enhanced progress tracking"""
     console = get_console()
@@ -1364,6 +1373,12 @@ async def run_tests_with_enhanced_progress(
         parallelism=1,  # Sequential for enhanced UI
         test_types=[test_type],
     )
+
+    # Create rate_limiter if not provided
+    if rate_limiter is None:
+        from ..utils.rate_limiter import RateLimiter
+
+        rate_limiter = RateLimiter()
 
     success_count = 0
     results = []
@@ -1398,6 +1413,7 @@ async def run_tests_with_enhanced_progress(
                         test_id,
                         False,
                         suite_config,
+                        rate_limiter=rate_limiter,
                     )
 
                 if result.get("success", False):
@@ -1448,6 +1464,7 @@ async def execute_conversation_test_real(
     test_id: str,
     verbose: bool = False,
     suite_config=None,
+    rate_limiter=None,
 ) -> dict:
     """Execute real conversation test with detailed progress tracking"""
     progress_tracker.update_simple_progress(test_id, "Building agent config...")
@@ -1476,7 +1493,9 @@ async def execute_conversation_test_real(
             ),
         )
         conversation_manager = ConversationManager(
-            config=agent_config, conversation_config=conversation_config
+            config=agent_config,
+            conversation_config=conversation_config,
+            rate_limiter=rate_limiter,
         )
 
         progress_tracker.update_simple_progress(test_id, "Running conversation...")
