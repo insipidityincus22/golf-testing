@@ -50,6 +50,10 @@ class ConversationManager:
             # Load from environment
             self.agent_config = load_agent_config()
 
+        # Ensure container mode is enabled for testing
+        self.agent_config.use_containers = True
+        self.agent_config.context_management_enabled = True
+
     def _add_conversation_turn(
         self,
         conversation: ConversationResult,
