@@ -7,6 +7,15 @@ from collections import defaultdict, deque
 class RateLimiter:
     """Simple rate limiter with RPM and token limits"""
 
+    # Entry tuple indices
+    TIMESTAMP_INDEX = 0
+    TOKENS_INDEX = 1
+    CORRELATION_ID_INDEX = 2
+
+    # Entry tuple minimum lengths
+    MIN_ENTRY_WITH_TOKENS = 2
+    MIN_ENTRY_WITH_ID = 3
+
     def __init__(self) -> None:
         # Updated to realistic API limits (conservative defaults for reliable operation)
         self.providers = {
@@ -61,7 +70,10 @@ class RateLimiter:
 
         # Find and update the specific request entry
         for i, entry in enumerate(self.request_history[provider]):
-            if len(entry) >= 3 and entry[2] == correlation_id:
+            if (
+                len(entry) >= self.MIN_ENTRY_WITH_ID
+                and entry[self.CORRELATION_ID_INDEX] == correlation_id
+            ):
                 req_time, _req_tokens, req_id = entry
                 self.request_history[provider][i] = (req_time, tokens_used, req_id)
                 break
@@ -72,22 +84,43 @@ class RateLimiter:
     def _clean_old_requests(self, provider: str, current_time: float) -> None:
         """Remove requests older than 1 minute and their token usage"""
         cutoff_time = current_time - 60
+        timeout_cutoff = current_time - 300  # 5 minute absolute timeout
 
         tokens_to_remove = 0
-        while (
-            self.request_history[provider]
-            and self.request_history[provider][0][0] < cutoff_time
-        ):
-            entry = self.request_history[provider].popleft()
-            if len(entry) >= 2:
-                tokens = entry[1]
-                tokens_to_remove += tokens
+        entries_to_remove = []
 
-                # Clean up any pending request that got orphaned
-                if len(entry) >= 3:
-                    correlation_id = entry[2]
+        # First pass: identify entries that can be safely removed
+        for entry in self.request_history[provider]:
+            if entry[self.TIMESTAMP_INDEX] >= cutoff_time:
+                break  # Rest are newer, stop checking
+
+            # Force cleanup of extremely old requests (5+ minutes)
+            if entry[self.TIMESTAMP_INDEX] < timeout_cutoff:
+                entries_to_remove.append(entry)
+                if len(entry) >= self.MIN_ENTRY_WITH_ID:
+                    correlation_id = entry[self.CORRELATION_ID_INDEX]
                     if correlation_id in self._pending_requests:
+                        print(
+                            f"Warning: Timing out request {correlation_id} after 5 minutes"
+                        )
                         del self._pending_requests[correlation_id]
+                continue
+
+            # Only remove if tokens have been recorded (not pending)
+            if len(entry) >= self.MIN_ENTRY_WITH_ID:
+                correlation_id = entry[self.CORRELATION_ID_INDEX]
+                # Skip entries that are still pending token recording
+                if correlation_id in self._pending_requests:
+                    continue
+
+            entries_to_remove.append(entry)
+
+        # Second pass: remove identified entries and count tokens
+        for entry in entries_to_remove:
+            self.request_history[provider].remove(entry)
+            if len(entry) >= self.MIN_ENTRY_WITH_TOKENS:
+                tokens = entry[self.TOKENS_INDEX]
+                tokens_to_remove += tokens
 
         # Remove old tokens from current usage
         self.token_usage[provider] = max(
