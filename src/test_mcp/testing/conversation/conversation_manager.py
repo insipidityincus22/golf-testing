@@ -139,7 +139,6 @@ class ConversationManager:
                     # Clear tool results from agent session after extracting them
                     agent.clear_tool_results()
 
-
                     # Also enforce maximum conversation length to prevent runaway conversations
                     if turn_number >= 50:  # Hard limit beyond config max_turns
                         conversation.status = ConversationStatus.ERROR
