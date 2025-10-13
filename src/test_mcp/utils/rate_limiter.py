@@ -42,12 +42,7 @@ class RateLimiter:
         while (
             len(self.request_history[provider]) >= rpm_limit
             or self.token_usage[provider] > tpm_limit * 0.8
-        ):  # 80% threshold
-            if self.token_usage[provider] > tpm_limit * 0.8:
-                print(
-                    f"   Approaching token limit for {provider}: {self.token_usage[provider]} tokens used"
-                )
-
+        ):
             await asyncio.sleep(1)
             now = time.time()
             self._clean_old_requests(provider, now)
