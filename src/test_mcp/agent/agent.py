@@ -199,24 +199,31 @@ class ClaudeAgent:
         base_delay = 1.0  # Start with 1 second
 
         for attempt in range(max_retries + 1):
+            correlation_id = None
             try:
                 # Acquire rate limiting slot before making API call
                 if self.rate_limiter:
-                    await self.rate_limiter.acquire_request_slot("anthropic")
+                    correlation_id = await self.rate_limiter.acquire_request_slot(
+                        "anthropic"
+                    )
 
                 # Make API call using regular client (no beta, no MCP servers)
                 response = self.client.messages.create(**api_params)
 
                 # Record actual token usage if rate limiter is configured
-                if self.rate_limiter and response.usage:
+                if self.rate_limiter and response.usage and correlation_id:
                     total_tokens = (
                         response.usage.input_tokens + response.usage.output_tokens
                     )
-                    self.rate_limiter.record_token_usage("anthropic", total_tokens)
+                    self.rate_limiter.record_token_usage(correlation_id, total_tokens)
 
                 return response
 
             except Exception as e:
+                # Clean up pending request on error
+                if self.rate_limiter and correlation_id:
+                    self.rate_limiter.cleanup_pending_request(correlation_id)
+
                 # Check if this is the last attempt
                 if attempt == max_retries:
                     raise e
