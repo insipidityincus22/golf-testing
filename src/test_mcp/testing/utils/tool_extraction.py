@@ -1,12 +1,11 @@
 import re
-from typing import Optional
 
 from ...agent.agent import ClaudeAgent
 from ..core.test_models import ToolCall
 
 
 def extract_tool_calls_from_agent(
-    agent: ClaudeAgent, recent_only: bool = False, target_server: Optional[str] = None
+    agent: ClaudeAgent, recent_only: bool = False, target_server: str | None = None
 ) -> list[ToolCall]:
     """
     Extract tool calls from agent's stored tool results (not from conversation text).

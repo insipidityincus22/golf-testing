@@ -108,16 +108,15 @@ class RateLimiter:
                             f"Warning: Timing out request {correlation_id} after 5 minutes"
                         )
                         del self._pending_requests[correlation_id]
-            else:
-                # Only remove if tokens have been recorded (not pending)
-                if len(entry) >= self.MIN_ENTRY_WITH_ID:
-                    correlation_id = entry[self.CORRELATION_ID_INDEX]
-                    # Skip entries that are still pending token recording
-                    if correlation_id not in self._pending_requests:
-                        should_remove = True
-                else:
-                    # Entry without correlation ID can be safely removed
+            # Only remove if tokens have been recorded (not pending)
+            elif len(entry) >= self.MIN_ENTRY_WITH_ID:
+                correlation_id = entry[self.CORRELATION_ID_INDEX]
+                # Skip entries that are still pending token recording
+                if correlation_id not in self._pending_requests:
                     should_remove = True
+            else:
+                # Entry without correlation ID can be safely removed
+                should_remove = True
 
             if should_remove:
                 # Count tokens before removal

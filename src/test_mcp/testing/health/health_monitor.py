@@ -1,6 +1,6 @@
 import time
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -17,14 +17,14 @@ class MCPHealthMetrics(BaseModel):
         ..., description="Server response time in milliseconds"
     )
     is_responsive: bool = Field(..., description="Whether server is responding")
-    protocol_version: Optional[str] = Field(
+    protocol_version: str | None = Field(
         default=None, description="MCP protocol version"
     )
     capabilities_count: int = Field(default=0, description="Number of capabilities")
     tools_count: int = Field(default=0, description="Number of tools available")
     resources_count: int = Field(default=0, description="Number of resources available")
     error_rate: float = Field(default=0.0, description="Error rate in recent requests")
-    uptime_minutes: Optional[float] = Field(
+    uptime_minutes: float | None = Field(
         default=None, description="Estimated uptime"
     )
 
@@ -40,7 +40,7 @@ class MCPHealthTestResult(BaseTestResult):
     check_name: str = Field(..., description="Name of health check")
     category: str = Field(..., description="Health check category")
     health_status: str = Field(..., description="healthy, degraded, unhealthy")
-    metrics: Optional[MCPHealthMetrics] = Field(
+    metrics: MCPHealthMetrics | None = Field(
         default=None, description="Health metrics"
     )
     alert_level: str = Field(
@@ -52,11 +52,11 @@ class MCPHealthMonitor:
     """MCP server health and performance monitoring"""
 
     def __init__(
-        self, server_url: str, progress_tracker: Optional[ProgressTracker] = None
+        self, server_url: str, progress_tracker: ProgressTracker | None = None
     ):
         self.server_url = server_url
         self.progress_tracker = progress_tracker
-        self.baseline_metrics: Optional[MCPHealthMetrics] = None
+        self.baseline_metrics: MCPHealthMetrics | None = None
 
     async def run_health_checks(self) -> list[MCPHealthTestResult]:
         """Run comprehensive health checks on MCP server"""
