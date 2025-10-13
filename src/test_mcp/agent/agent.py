@@ -203,7 +203,7 @@ class ClaudeAgent:
                 # Acquire rate limiting slot before making API call
                 if self.rate_limiter:
                     await self.rate_limiter.acquire_request_slot("anthropic")
-                
+
                 # Make API call using regular client (no beta, no MCP servers)
                 response = self.client.messages.create(**api_params)
 
