@@ -5,7 +5,7 @@ A sophisticated testing framework that combines AI agents with MCP server connec
 for automated testing and CI/CD integration.
 """
 
-__version__ = "0.1.0-beta.4"
+__version__ = "0.1.0-beta.5"
 __author__ = "MCP Testing Suite"
 __email__ = "antoni@golf.dev"
 
