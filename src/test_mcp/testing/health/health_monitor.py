@@ -24,9 +24,7 @@ class MCPHealthMetrics(BaseModel):
     tools_count: int = Field(default=0, description="Number of tools available")
     resources_count: int = Field(default=0, description="Number of resources available")
     error_rate: float = Field(default=0.0, description="Error rate in recent requests")
-    uptime_minutes: float | None = Field(
-        default=None, description="Estimated uptime"
-    )
+    uptime_minutes: float | None = Field(default=None, description="Estimated uptime")
 
 
 class MCPHealthTestResult(BaseTestResult):
@@ -40,9 +38,7 @@ class MCPHealthTestResult(BaseTestResult):
     check_name: str = Field(..., description="Name of health check")
     category: str = Field(..., description="Health check category")
     health_status: str = Field(..., description="healthy, degraded, unhealthy")
-    metrics: MCPHealthMetrics | None = Field(
-        default=None, description="Health metrics"
-    )
+    metrics: MCPHealthMetrics | None = Field(default=None, description="Health metrics")
     alert_level: str = Field(
         default="info", description="info, warning, error, critical"
     )
