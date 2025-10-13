@@ -85,38 +85,6 @@ class ClaudeAgent:
 
         return messages
 
-    def _format_tool_result(self, result_text: str) -> str:
-        """Format tool result JSON like jq - generic and works with any structure"""
-        try:
-            # Try to parse as JSON
-            data = json.loads(result_text)
-
-            # Pretty print with proper indentation, like jq
-            formatted = json.dumps(data, indent=2, ensure_ascii=False)
-
-            # If it's very long, truncate but keep it readable
-            if len(formatted) > 2000:
-                lines = formatted.split("\n")
-                if len(lines) > 50:
-                    # Keep first 40 lines and last 5 lines with a truncation message
-                    truncated = (
-                        lines[:40]
-                        + [f"  ... ({len(lines) - 45} lines truncated) ..."]
-                        + lines[-5:]
-                    )
-                    formatted = "\n".join(truncated)
-                else:
-                    # Just truncate characters but try to end on a complete line
-                    formatted = formatted[:1950] + "\n  ... (truncated) ...\n}"
-
-            return formatted
-
-        except (json.JSONDecodeError, TypeError):
-            # If not valid JSON, return as-is but maybe truncate if very long
-            if len(result_text) > 1000:
-                return result_text[:997] + "..."
-            return result_text
-
     def _process_response_content(
         self, content: list[Any]
     ) -> tuple[str, list[dict[str, Any]]]:
