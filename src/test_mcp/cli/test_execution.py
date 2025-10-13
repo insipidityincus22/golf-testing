@@ -193,6 +193,7 @@ async def execute_test_cases(
 
     # Initialize rate limiter for API calls
     from ..utils.rate_limiter import RateLimiter
+
     rate_limiter = RateLimiter()
 
     # Use Rich Live context for real-time updates (same pattern as enhanced progress)
@@ -214,7 +215,9 @@ async def execute_test_cases(
 
             try:
                 # Execute test using the real engine router (from Phase 1)
-                result = await run_single_test_case(test_case, server_config, verbose, suite_config, rate_limiter)
+                result = await run_single_test_case(
+                    test_case, server_config, verbose, suite_config, rate_limiter
+                )
 
                 if result.get("success", False):
                     successful_tests += 1
@@ -1374,6 +1377,7 @@ async def run_tests_with_enhanced_progress(
     # Create rate_limiter if not provided
     if rate_limiter is None:
         from ..utils.rate_limiter import RateLimiter
+
         rate_limiter = RateLimiter()
 
     success_count = 0
@@ -1489,7 +1493,9 @@ async def execute_conversation_test_real(
             ),
         )
         conversation_manager = ConversationManager(
-            config=agent_config, conversation_config=conversation_config, rate_limiter=rate_limiter
+            config=agent_config,
+            conversation_config=conversation_config,
+            rate_limiter=rate_limiter,
         )
 
         progress_tracker.update_simple_progress(test_id, "Running conversation...")

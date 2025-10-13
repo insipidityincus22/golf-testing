@@ -27,18 +27,23 @@ class RateLimiter:
         self._clean_old_requests(provider, now)
 
         # Check both request and token limits
-        while (len(self.request_history[provider]) >= rpm_limit or
-               self.token_usage[provider] > tpm_limit * 0.8):  # 80% threshold
-
+        while (
+            len(self.request_history[provider]) >= rpm_limit
+            or self.token_usage[provider] > tpm_limit * 0.8
+        ):  # 80% threshold
             if self.token_usage[provider] > tpm_limit * 0.8:
-                print(f"   Approaching token limit for {provider}: {self.token_usage[provider]} tokens used")
+                print(
+                    f"   Approaching token limit for {provider}: {self.token_usage[provider]} tokens used"
+                )
 
             await asyncio.sleep(1)
             now = time.time()
             self._clean_old_requests(provider, now)
 
         # Record the request
-        self.request_history[provider].append((now, 0))  # Will be updated with actual usage
+        self.request_history[provider].append(
+            (now, 0)
+        )  # Will be updated with actual usage
 
     def record_token_usage(self, provider: str, tokens_used: int) -> None:
         """Record actual token usage from API response"""
@@ -54,10 +59,14 @@ class RateLimiter:
         cutoff_time = current_time - 60
 
         tokens_to_remove = 0
-        while (self.request_history[provider] and
-               self.request_history[provider][0][0] < cutoff_time):
+        while (
+            self.request_history[provider]
+            and self.request_history[provider][0][0] < cutoff_time
+        ):
             _, tokens = self.request_history[provider].popleft()
             tokens_to_remove += tokens
 
         # Remove old tokens from current usage
-        self.token_usage[provider] = max(0, self.token_usage[provider] - tokens_to_remove)
+        self.token_usage[provider] = max(
+            0, self.token_usage[provider] - tokens_to_remove
+        )

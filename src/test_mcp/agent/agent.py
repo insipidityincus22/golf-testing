@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 import uuid
@@ -176,28 +177,41 @@ class ClaudeAgent:
         error_str = str(error).lower()
         retryable_patterns = [
             # Rate limiting
-            "429", "529", "rate_limit_error", "overloaded",
+            "429",
+            "529",
+            "rate_limit_error",
+            "overloaded",
             # Server errors
-            "502", "503", "504",
+            "502",
+            "503",
+            "504",
             # Connection issues
-            "timeout", "connection error", "server error",
+            "timeout",
+            "connection error",
+            "server error",
         ]
 
         return any(pattern in error_str for pattern in retryable_patterns)
 
-    def _make_api_call_with_retry(self, api_params: dict) -> Any:
+    async def _make_api_call_with_retry(self, api_params: dict) -> Any:
         """Make API call with retry logic for transient errors"""
         max_retries = 3
         base_delay = 1.0  # Start with 1 second
 
         for attempt in range(max_retries + 1):
             try:
+                # Acquire rate limiting slot before making API call
+                if self.rate_limiter:
+                    await self.rate_limiter.acquire_request_slot("anthropic")
+                
                 # Make API call using regular client (no beta, no MCP servers)
                 response = self.client.messages.create(**api_params)
 
                 # Record actual token usage if rate limiter is configured
                 if self.rate_limiter and response.usage:
-                    total_tokens = response.usage.input_tokens + response.usage.output_tokens
+                    total_tokens = (
+                        response.usage.input_tokens + response.usage.output_tokens
+                    )
                     self.rate_limiter.record_token_usage("anthropic", total_tokens)
 
                 return response
@@ -219,7 +233,7 @@ class ClaudeAgent:
                 )
                 print(f"   Retrying in {delay:.1f}s...")
 
-                time.sleep(delay)
+                await asyncio.sleep(delay)
 
         # This shouldn't be reached, but just in case
         raise Exception("Max retries exceeded")
@@ -263,7 +277,7 @@ class ClaudeAgent:
 
         try:
             # Call Anthropic API (regular call, no beta, no mcp_servers)
-            response = self._make_api_call_with_retry(api_params)
+            response = await self._make_api_call_with_retry(api_params)
 
             # Extract text response
             assistant_text = self._extract_text_from_response(response)
@@ -379,7 +393,7 @@ class ClaudeAgent:
                         ),
                     }
 
-                    continued_response = self._make_api_call_with_retry(
+                    continued_response = await self._make_api_call_with_retry(
                         continued_api_params
                     )
 
