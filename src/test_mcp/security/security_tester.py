@@ -107,14 +107,20 @@ class MCPSecurityTester:
         self.auth_required = auth_required
         self.include_penetration_tests = include_penetration_tests
 
-        # Add MCP session management
+        # Use shared MCP client manager for OAuth support
+        from ..mcp_client.client_manager import MCPClientManager
+
+        self.mcp_client = MCPClientManager()
+        self.server_id: str | None = None
+
+        # Keep session reference for backward compatibility
         self.session: ClientSession | None = None
         self.exit_stack = AsyncExitStack()
         self.available_tools: list = []
         self.available_resources: list = []
 
     async def _connect_to_server(self):
-        """Connect to MCP server using official SDK"""
+        """Connect to MCP server using MCPClientManager for OAuth support"""
         if not self.server_url:
             raise ValueError("Server URL is required for MCP connection")
 
@@ -122,72 +128,55 @@ class MCPSecurityTester:
         if ClientSession is None or streamablehttp_client is None:
             raise ImportError("MCP SDK not available. Install with: pip install mcp")
 
-        # Extract and prepare authentication headers
-        headers = {}
-        if auth_token := self.server_config.get("authorization_token"):
-            # Support both plain tokens and Bearer-prefixed tokens
-            if not auth_token.startswith("Bearer "):
-                auth_token = f"Bearer {auth_token}"
-            headers["Authorization"] = auth_token
+        # Use MCPClientManager to handle OAuth flow automatically
+        # This gives us the same OAuth support as conversational testing
+        try:
+            self.server_id = await self.mcp_client.connect_server(self.server_config)
+            
+            # Get session from the connections dictionary
+            connection = self.mcp_client.connections.get(self.server_id)
+            if not connection:
+                raise RuntimeError("Connection established but not found in connections")
+                
+            self.session = connection.session
+            if not self.session:
+                raise RuntimeError("Failed to establish MCP session")
 
-        # Create MCP transport
-        if headers:
-            transport_gen = streamablehttp_client(self.server_url, headers=headers)
-        else:
-            transport_gen = streamablehttp_client(self.server_url)
-
-        (
-            read_stream,
-            write_stream,
-            get_session_id,
-        ) = await self.exit_stack.enter_async_context(transport_gen)
-
-        # Create client info
-        client_info = Implementation(name="mcp-security-tester", version="1.0.0")
-
-        # Establish MCP session
-        self.session = await self.exit_stack.enter_async_context(
-            ClientSession(read_stream, write_stream, client_info=client_info)
-        )
-
-        # Initialize with timeout
-        await asyncio.wait_for(self.session.initialize(), timeout=30.0)
+        except Exception as e:
+            raise RuntimeError(f"Failed to connect to MCP server: {e}") from e
 
     async def _disconnect_from_server(self):
         """Clean up MCP connection"""
         try:
-            await self.exit_stack.aclose()
+            if self.server_id:
+                await self.mcp_client.disconnect_server(self.server_id)
+                self.server_id = None
         except Exception:
             pass  # Ignore cleanup errors
         finally:
             self.session = None
 
     async def _connect_with_oauth(self, auth_token: str | None = None) -> bool:
-        """Establish MCP connection with OAuth token"""
+        """Establish MCP connection with OAuth token for testing purposes"""
         try:
-            # Check if streamablehttp_client supports auth headers
+            from ..mcp_client.client_manager import MCPClientManager
+
+            # Create temporary config with the test token
+            test_config = self.server_config.copy()
             if auth_token:
-                # Pass token to transport layer
-                headers = {"Authorization": f"Bearer {auth_token}"}
-                transport_gen = streamablehttp_client(self.server_url, headers=headers)
-            else:
-                transport_gen = streamablehttp_client(self.server_url)
+                test_config["authorization_token"] = auth_token
 
-            (
-                read_stream,
-                write_stream,
-                get_session_id,
-            ) = await self.exit_stack.enter_async_context(transport_gen)
+            # Use MCPClientManager for OAuth-aware connection
+            test_client = MCPClientManager()
+            test_server_id = await test_client.connect_server(test_config)
 
-            client_info = Implementation(name="mcp-security-tester", version="1.0.0")
+            # Check if connection was successful
+            if test_client.get_session(test_server_id):
+                # Clean up test connection
+                await test_client.disconnect_server(test_server_id)
+                return True
 
-            self.session = await self.exit_stack.enter_async_context(
-                ClientSession(read_stream, write_stream, client_info=client_info)
-            )
-
-            # Try to initialize - this should fail with invalid tokens
-            await asyncio.wait_for(self.session.initialize(), timeout=10.0)
-            return True
+            return False
 
         except Exception:
             # Connection failed - this is expected for invalid tokens

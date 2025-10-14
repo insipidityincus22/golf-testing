@@ -70,6 +70,14 @@ class MCPComplianceTester:
         self.server_config = server_config
         self.progress_tracker = progress_tracker
         self.server_info: MCPServerInfo | None = None
+
+        # Use shared MCP client manager for OAuth support
+        from ...mcp_client.client_manager import MCPClientManager
+
+        self.mcp_client = MCPClientManager()
+        self.server_id: str | None = None
+
+        # Keep session reference for backward compatibility
         self.session: ClientSession | None = None
         self.exit_stack = AsyncExitStack()
 
@@ -210,48 +218,46 @@ class MCPComplianceTester:
         return results
 
     async def _connect_to_server(self):
-        """Connect to MCP server using official SDK with authentication support"""
+        """Connect to MCP server using MCPClientManager for OAuth support"""
         server_url = self.server_config.get("url")
         if not server_url:
             raise ValueError("Server URL is required - STDIO servers not supported")
 
-        # Extract and prepare authentication headers
-        headers = {}
-        if auth_token := self.server_config.get("authorization_token"):
-            # Support both plain tokens and Bearer-prefixed tokens
-            if not auth_token.startswith("Bearer "):
-                auth_token = f"Bearer {auth_token}"
-            headers["Authorization"] = auth_token
+        # Check SDK availability
+        if (
+            ClientSession is None
+            or streamablehttp_client is None
+            or Implementation is None
+        ):
+            raise ImportError("MCP SDK not available. Install with: pip install mcp")
 
-        # Pass headers to streamablehttp_client
-        if headers:
-            transport_gen = streamablehttp_client(server_url, headers=headers)
-        else:
-            transport_gen = streamablehttp_client(server_url)
+        # Use MCPClientManager to handle OAuth flow automatically
+        # This gives us the same OAuth support as conversational testing
+        try:
+            self.server_id = await self.mcp_client.connect_server(self.server_config)
+            
+            # Get session from the connections dictionary
+            connection = self.mcp_client.connections.get(self.server_id)
+            if not connection:
+                raise RuntimeError("Connection established but not found in connections")
+                
+            self.session = connection.session
+            if not self.session:
+                raise RuntimeError("Failed to establish MCP session")
 
-        # Rest of connection setup remains the same
-        (
-            read_stream,
-            write_stream,
-            _,  # get_session_id not used
-        ) = await self.exit_stack.enter_async_context(transport_gen)
-
-        # Create client info for MCP session
-        client_info = Implementation(name="mcp-testing-framework", version="1.0.0")
-
-        self.session = await self.exit_stack.enter_async_context(
-            ClientSession(read_stream, write_stream, client_info=client_info)
-        )
-
-        # Initialize MCP session
-        await asyncio.wait_for(self.session.initialize(), timeout=30.0)
+        except Exception as e:
+            raise RuntimeError(f"Failed to connect to MCP server: {e}") from e
 
     async def _disconnect_from_server(self):
         """Clean up MCP connection"""
         try:
-            await self.exit_stack.aclose()
+            if self.server_id:
+                await self.mcp_client.disconnect_server(self.server_id)
+                self.server_id = None
         except Exception:
             pass  # Ignore cleanup errors
+        finally:
+            self.session = None
 
     async def _test_protocol_handshake(self) -> MCPComplianceTestResult:
         """Test MCP protocol handshake and initial connection using SDK"""
