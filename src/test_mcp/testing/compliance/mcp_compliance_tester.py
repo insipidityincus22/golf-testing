@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import AsyncExitStack
 from datetime import datetime
 from typing import Any
@@ -235,12 +234,14 @@ class MCPComplianceTester:
         # This gives us the same OAuth support as conversational testing
         try:
             self.server_id = await self.mcp_client.connect_server(self.server_config)
-            
+
             # Get session from the connections dictionary
             connection = self.mcp_client.connections.get(self.server_id)
             if not connection:
-                raise RuntimeError("Connection established but not found in connections")
-                
+                raise RuntimeError(
+                    "Connection established but not found in connections"
+                )
+
             self.session = connection.session
             if not self.session:
                 raise RuntimeError("Failed to establish MCP session")
