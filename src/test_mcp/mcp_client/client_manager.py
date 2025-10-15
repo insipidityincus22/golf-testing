@@ -1,8 +1,8 @@
 import asyncio
 import os
 import signal
+import socket
 import threading
-import time
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -59,43 +59,52 @@ class SharedTokenStorage(TokenStorage):
     """Shared token storage that persists across multiple MCP client instances."""
 
     _instances: dict[str, "SharedTokenStorage"] = {}
+    _lock = threading.Lock()  # Class-level lock for thread safety
 
     def __init__(self, server_url: str):
         self.server_url = server_url
         self.tokens: OAuthToken | None = None
         self.client_info: OAuthClientInformationFull | None = None
+        self._instance_lock = threading.Lock()  # Instance-level lock
 
     @classmethod
     def get_instance(cls, server_url: str) -> "SharedTokenStorage":
         """Get or create a shared token storage instance for the given server URL."""
-        if server_url not in cls._instances:
-            cls._instances[server_url] = cls(server_url)
-        return cls._instances[server_url]
+        with cls._lock:
+            if server_url not in cls._instances:
+                cls._instances[server_url] = cls(server_url)
+            return cls._instances[server_url]
 
     @classmethod
     def clear_all(cls) -> None:
         """Clear all shared token storage instances."""
-        cls._instances.clear()
+        with cls._lock:
+            cls._instances.clear()
 
     async def get_tokens(self) -> OAuthToken | None:
         """Get stored tokens."""
-        return self.tokens
+        with self._instance_lock:
+            return self.tokens
 
     async def set_tokens(self, tokens: OAuthToken) -> None:
         """Store tokens."""
-        self.tokens = tokens
+        with self._instance_lock:
+            self.tokens = tokens
 
     async def get_client_info(self) -> OAuthClientInformationFull | None:
         """Get stored client information."""
-        return self.client_info
+        with self._instance_lock:
+            return self.client_info
 
     async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
         """Store client information."""
-        self.client_info = client_info
+        with self._instance_lock:
+            self.client_info = client_info
 
     def has_valid_tokens(self) -> bool:
         """Check if we have valid tokens stored."""
-        return self.tokens is not None
+        with self._instance_lock:
+            return self.tokens is not None
 
 
 class CallbackHandler(BaseHTTPRequestHandler):
@@ -106,47 +115,41 @@ class CallbackHandler(BaseHTTPRequestHandler):
         parsed_path = urlparse(self.path)
 
         if parsed_path.path == "/callback":
-            # Parse query parameters
-            params = parse_qs(parsed_path.query)
+            # Parse callback parameters
+            query_params = parse_qs(parsed_path.query)
+            callback_data = {}
 
-            # Store callback data on the server
-            self.server.callback_data = {
-                "code": params.get("code", [None])[0],
-                "state": params.get("state", [None])[0],
-                "error": params.get("error", [None])[0],
-                "error_description": params.get("error_description", [None])[0],
-            }
+            # Extract OAuth parameters
+            if "code" in query_params:
+                callback_data["code"] = query_params["code"][0]
+            if "state" in query_params:
+                callback_data["state"] = query_params["state"][0]
+            if "error" in query_params:
+                callback_data["error"] = query_params["error"][0]
+            if "error_description" in query_params:
+                callback_data["error_description"] = query_params["error_description"][
+                    0
+                ]
 
-            # Send response to browser
+            # Set callback data via server reference (event-based)
+            if hasattr(self.server, "callback_server_ref"):
+                self.server.callback_server_ref.set_callback_data(callback_data)
+            else:
+                # Fallback to old method for compatibility
+                self.server.callback_data = callback_data
+
+            # Send success response
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
 
-            if self.server.callback_data["error"]:
-                html_content = f"""
-                <html>
-                <head><title>Authorization Error</title></head>
-                <body>
-                    <h2>Authorization Failed</h2>
-                    <p>Error: {self.server.callback_data["error"]}</p>
-                    <p>Description: {self.server.callback_data.get("error_description", "Unknown error")}</p>
-                    <p>You can close this window.</p>
-                </body>
-                </html>
-                """
-            else:
-                html_content = """
-                <html>
-                <head><title>Authorization Successful</title></head>
-                <body>
-                    <h2>Authorization Successful!</h2>
-                    <p>You can close this window and return to the MCP Testing Framework.</p>
-                    <script>setTimeout(() => window.close(), 2000);</script>
-                </body>
-                </html>
-                """
-
-            self.wfile.write(html_content.encode())
+            success_message = """
+            <html><body style="font-family: Arial; text-align: center; padding: 50px;">
+                <h2 style="color: green;">✅ Authorization Successful!</h2>
+                <p>You can close this window and return to the MCP Testing Framework.</p>
+            </body></html>
+            """
+            self.wfile.write(success_message.encode())
         else:
             # 404 for other paths
             self.send_response(404)
@@ -157,21 +160,63 @@ class CallbackHandler(BaseHTTPRequestHandler):
         pass
 
 
+def find_free_port(start_port: int = 3030, max_attempts: int = 100) -> int:
+    """Find an available port starting from start_port.
+
+    Args:
+        start_port: Port to start searching from
+        max_attempts: Maximum number of ports to try
+
+    Returns:
+        Available port number
+
+    Raises:
+        RuntimeError: If no free ports found
+    """
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("localhost", port))
+                return port
+        except OSError:
+            continue  # Port in use, try next one
+
+    raise RuntimeError(
+        f"No free ports found in range {start_port}-{start_port + max_attempts}"
+    )
+
+
 class CallbackServer:
     """Local HTTP server to handle OAuth callbacks."""
 
-    def __init__(self, port: int = 3030):
-        self.port = port
+    def __init__(self, port: int = None):
+        self.port = port or find_free_port()
         self.server = None
         self.thread = None
         self.callback_data = None
+        # Event-based synchronization
+        self.callback_event = threading.Event()
+        self.callback_lock = threading.Lock()
 
     def start(self):
         """Start the callback server in a background thread."""
-        self.server = HTTPServer(("localhost", self.port), CallbackHandler)
-        self.server.callback_data = None
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
+        try:
+            self.server = HTTPServer(("localhost", self.port), CallbackHandler)
+            self.server.callback_data = None
+            self.server.callback_server_ref = (
+                self  # Allow handler to access this instance
+            )
+            self.thread = threading.Thread(
+                target=self.server.serve_forever, daemon=True
+            )
+            self.thread.start()
+        except OSError as e:
+            # Port might have been taken between discovery and binding
+            if "Address already in use" in str(e):
+                self.port = find_free_port(self.port + 1)
+                self.start()  # Retry with new port
+            else:
+                raise
 
     def stop(self):
         """Stop the callback server."""
@@ -182,15 +227,22 @@ class CallbackServer:
             self.thread.join(timeout=1)
 
     def wait_for_callback(self, timeout: float = 120.0) -> dict[str, Any] | None:
-        """Wait for OAuth callback with timeout."""
-        start_time = time.time()
-
-        while time.time() - start_time < timeout:
-            if self.server and self.server.callback_data:
-                return self.server.callback_data
-            time.sleep(0.1)
-
+        """Wait for OAuth callback with event-based synchronization."""
+        # Wait for callback event with timeout
+        if self.callback_event.wait(timeout):
+            with self.callback_lock:
+                return self.callback_data
         return None  # Timeout
+
+    def set_callback_data(self, data: dict[str, Any]) -> None:
+        """Set callback data and signal waiting threads."""
+        with self.callback_lock:
+            self.callback_data = data
+        self.callback_event.set()
+
+    def get_callback_url(self) -> str:
+        """Get the callback URL for this server instance."""
+        return f"http://localhost:{self.port}/callback"
 
 
 @dataclass
@@ -278,40 +330,29 @@ Please visit this URL to authorize the MCP Testing Framework:
 
         console.print()
 
-    async def _handle_oauth_callback(self) -> tuple[str, str | None]:
-        """Handle OAuth callback using local callback server."""
-        # Import Rich components for better UI
+    async def _handle_oauth_callback(self, auth_url: str) -> tuple[str, str | None]:
+        """Handle OAuth callback by starting local server and waiting for redirect"""
         from rich.console import Console
-        from rich.panel import Panel
 
         console = Console()
 
-        # Create waiting panel
-        waiting_panel = Panel(
-            """[green]🔄 Waiting for OAuth Authorization[/green]
-
-The authorization process is in progress:
-
-• [dim]Complete the authorization in your browser window[/dim]
-• [dim]The callback will be handled automatically[/dim]
-• [dim]You can close the browser window after authorization[/dim]
-• [dim]🔗 Local callback server started on http://localhost:3030/callback[/dim]
-
-[yellow]💡 This may take up to 2 minutes to complete[/yellow]""",
-            title="🔐 OAuth Authorization in Progress",
-            border_style="blue",
-            padding=(1, 2),
-        )
-
-        console.print()
-        console.print(waiting_panel)
-        console.print()
-
-        # Start callback server
-        callback_server = CallbackServer(port=3030)
+        # Start callback server with dynamic port
+        callback_server = CallbackServer()  # Will find free port automatically
 
         try:
             callback_server.start()
+
+            # Update auth_url to use actual callback port
+            callback_url = callback_server.get_callback_url()
+
+            console.print("\n🌐 [bold green]OAuth Authorization Required[/bold green]")
+            console.print(f"📍 Local callback server: [cyan]{callback_url}[/cyan]")
+            console.print(
+                f"🔗 Authorization URL: [cyan][link={auth_url}]{auth_url}[/link][/cyan]\n"
+            )
+
+            # Open browser to auth URL
+            await self._handle_oauth_redirect(auth_url)
 
             # Wait for callback with timeout
             callback_data = callback_server.wait_for_callback(timeout=120.0)
@@ -398,12 +439,13 @@ The authorization process is in progress:
                 ) from e
 
     def _build_client_metadata(
-        self, oauth_metadata: dict = None
+        self, oauth_metadata: dict = None, callback_port: int = None
     ) -> OAuthClientMetadata:
         """Build OAuth client metadata using hardcoded testing defaults"""
 
-        # Hardcoded values for testing framework
-        redirect_uri = "http://localhost:3030/callback"
+        # Use provided port or find available one
+        port = callback_port or find_free_port()
+        redirect_uri = f"http://localhost:{port}/callback"
         client_name = "MCP Testing Framework"
         grant_types = ["authorization_code", "refresh_token"]
         response_types = ["code"]
@@ -421,6 +463,120 @@ The authorization process is in progress:
             grant_types=grant_types,
             response_types=response_types,
             scope=scope,
+        )
+
+    def _extract_oauth_error_details(self, exception: Exception) -> dict[str, str]:
+        """Extract specific OAuth error information from exceptions.
+
+        Args:
+            exception: Exception caught during OAuth flow
+
+        Returns:
+            Dictionary with error, description, and suggested_action fields
+        """
+        error_info = {
+            "error": "unknown_error",
+            "description": str(exception),
+            "suggested_action": "Try using token-based authentication instead",
+        }
+
+        # Check for HTTP response with OAuth error
+        if hasattr(exception, "response") and exception.response:
+            try:
+                if hasattr(exception.response, "json"):
+                    error_data = exception.response.json()
+                elif hasattr(exception.response, "text"):
+                    import json
+
+                    error_data = json.loads(exception.response.text)
+                else:
+                    error_data = {}
+
+                if error_data.get("error"):
+                    error_info.update(
+                        {
+                            "error": error_data.get("error", "oauth_error"),
+                            "description": error_data.get(
+                                "error_description", str(exception)
+                            ),
+                            "suggested_action": self._get_oauth_error_action(
+                                error_data.get("error")
+                            ),
+                        }
+                    )
+                    return error_info
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+        # Pattern matching for common OAuth errors
+        error_msg = str(exception).lower()
+
+        if "invalid_client" in error_msg:
+            error_info.update(
+                {
+                    "error": "invalid_client",
+                    "description": "Client authentication failed",
+                    "suggested_action": "Verify server OAuth client configuration and metadata discovery",
+                }
+            )
+        elif "invalid_grant" in error_msg or "authorization code" in error_msg:
+            error_info.update(
+                {
+                    "error": "invalid_grant",
+                    "description": "Authorization code invalid, expired, or already used",
+                    "suggested_action": "Retry OAuth flow - code may have expired",
+                }
+            )
+        elif "invalid_request" in error_msg:
+            error_info.update(
+                {
+                    "error": "invalid_request",
+                    "description": "OAuth request parameters are invalid",
+                    "suggested_action": "Check OAuth client metadata and server endpoint configuration",
+                }
+            )
+        elif "access_denied" in error_msg:
+            error_info.update(
+                {
+                    "error": "access_denied",
+                    "description": "User denied authorization request",
+                    "suggested_action": "Complete authorization flow in browser or use different credentials",
+                }
+            )
+        elif "metadata" in error_msg or "well-known" in error_msg:
+            error_info.update(
+                {
+                    "error": "metadata_discovery_failed",
+                    "description": "OAuth server metadata discovery failed",
+                    "suggested_action": "Verify server supports OAuth and .well-known endpoints are accessible",
+                }
+            )
+        elif "callback" in error_msg or "timeout" in error_msg:
+            error_info.update(
+                {
+                    "error": "callback_timeout",
+                    "description": "OAuth callback timeout or failure",
+                    "suggested_action": "Complete authorization in browser within 2 minutes",
+                }
+            )
+
+        return error_info
+
+    def _get_oauth_error_action(self, error_code: str) -> str:
+        """Get suggested action for specific OAuth error codes."""
+        actions = {
+            "invalid_client": "Check client_id and client_secret configuration",
+            "invalid_grant": "Retry OAuth flow - authorization code may have expired",
+            "invalid_request": "Verify OAuth request parameters and scopes",
+            "unauthorized_client": "Check client is registered for authorization_code grant",
+            "unsupported_grant_type": "Server may not support authorization code flow",
+            "invalid_scope": "Request scopes that are supported by the server",
+            "access_denied": "User denied access - retry with different account",
+            "server_error": "Check server logs - OAuth server may be experiencing issues",
+            "temporarily_unavailable": "Retry OAuth flow after a brief delay",
+        }
+        return actions.get(
+            error_code, "Review OAuth server configuration and try token-based auth"
         )
 
     @asynccontextmanager
@@ -581,98 +737,114 @@ The authorization process is in progress:
 
                 console = Console()
 
-                # Get detailed error information for debugging
-                error_details = str(e)
-                exception_type = type(e).__name__
+                # Extract specific OAuth error details
+                oauth_error = self._extract_oauth_error_details(e)
 
-                # Handle TaskGroup exceptions specially
-                if hasattr(e, "__notes__") and e.__notes__:
-                    error_details += f"\nAdditional details: {'; '.join(e.__notes__)}"
-
-                # Check for nested exceptions in TaskGroup/ExceptionGroup
-                nested_errors = []
-                if hasattr(e, "exceptions"):
-                    for nested_e in e.exceptions:
-                        nested_errors.append(f"{type(nested_e).__name__}: {nested_e!s}")
-
-                if nested_errors:
-                    error_details += f"\nNested exceptions: {'; '.join(nested_errors)}"
-
-                # Provide specific error guidance based on exception type
-                if "TaskGroup" in error_details or "ExceptionGroup" in exception_type:
+                # Create detailed error panel based on extracted information
+                if oauth_error["error"] != "unknown_error":
+                    # Specific OAuth error
                     error_panel = Panel(
-                        f"""[red]❌ OAuth Token Exchange Failed[/red]
+                        f"""[red]❌ OAuth Error: {oauth_error["error"].replace("_", " ").title()}[/red]
 
-The OAuth authorization code was received but token exchange failed due to concurrent operation errors.
+[yellow]Description:[/yellow]
+{oauth_error["description"]}
 
-[yellow]Debug information:[/yellow]
-• Exception type: {exception_type}
-• Error details: {error_details}
+[yellow]Suggested Solution:[/yellow]
+{oauth_error["suggested_action"]}
 
-[yellow]Possible solutions:[/yellow]
-• Check server OAuth token endpoint is working correctly
-• Verify client credentials and OAuth configuration
-• Check server logs for token validation errors
-• Try using token-based authentication instead
-
-[dim]This typically indicates issues with the OAuth server's token endpoint or token validation.[/dim]""",
-                        title="🔧 Token Exchange Error",
-                        border_style="red",
-                    )
-                elif "metadata" in str(e).lower():
-                    error_panel = Panel(
-                        f"""[red]❌ OAuth Metadata Discovery Failed[/red]
-
-The server might not support OAuth or the endpoints are not accessible.
-
-[yellow]Possible solutions:[/yellow]
-• Verify the server URL is correct
-• Check if the server supports OAuth 2.0
-• Ensure `.well-known/oauth-authorization-server` endpoint is available
-• Try using token-based authentication instead
-
-[dim]Original error:[/dim] {e!s}""",
-                        title="🔧 Configuration Issue",
-                        border_style="red",
-                    )
-                elif "callback" in str(e).lower():
-                    error_panel = Panel(
-                        f"""[red]❌ OAuth Callback Failed[/red]
-
-There was an issue processing the OAuth authorization callback.
-
-[yellow]Possible solutions:[/yellow]
-• Ensure you copied the complete callback URL
-• Check that the callback URL contains the authorization code
-• Verify the OAuth flow completed successfully in your browser
-
-[dim]Original error:[/dim] {e!s}""",
-                        title="🔧 Callback Issue",
+[dim]Technical Details:[/dim]
+• Error Code: {oauth_error["error"]}
+• Exception Type: {type(e).__name__}""",
+                        title="🔧 OAuth Authentication Failed",
                         border_style="red",
                     )
                 else:
-                    error_panel = Panel(
-                        f"""[red]❌ OAuth Setup Failed[/red]
+                    # Handle TaskGroup/ExceptionGroup specially with enhanced context
+                    error_details = str(e)
+                    exception_type = type(e).__name__
 
-{error_details}
+                    if hasattr(e, "__notes__") and e.__notes__:
+                        error_details += (
+                            f"\nAdditional details: {'; '.join(e.__notes__)}"
+                        )
 
-[yellow]Exception type:[/yellow] {exception_type}
+                    nested_errors = []
+                    if hasattr(e, "exceptions"):
+                        for nested_e in e.exceptions:
+                            # Try to extract OAuth errors from nested exceptions
+                            nested_oauth_error = self._extract_oauth_error_details(
+                                nested_e
+                            )
+                            if nested_oauth_error["error"] != "unknown_error":
+                                nested_errors.append(
+                                    f"OAuth {nested_oauth_error['error']}: {nested_oauth_error['description']}"
+                                )
+                            else:
+                                nested_errors.append(
+                                    f"{type(nested_e).__name__}: {nested_e!s}"
+                                )
 
-[yellow]Try using token-based authentication instead:[/yellow]
-• Remove `oauth_config` from server configuration
-• Add `authorization_token` with a Bearer token""",
-                        title="🔧 Authentication Error",
-                        border_style="red",
-                    )
+                    if nested_errors:
+                        error_details += (
+                            f"\nNested exceptions: {'; '.join(nested_errors)}"
+                        )
+
+                    if (
+                        "TaskGroup" in error_details
+                        or "ExceptionGroup" in exception_type
+                    ):
+                        error_panel = Panel(
+                            f"""[red]❌ OAuth Token Exchange Failed[/red]
+
+The OAuth authorization code was received but token exchange failed.
+
+[yellow]Debug Information:[/yellow]
+• Exception Type: {exception_type}
+• Error Details: {error_details}
+
+[yellow]Common Causes:[/yellow]
+• Server OAuth token endpoint is not working correctly
+• Client credentials or OAuth configuration is invalid  
+• Network connectivity issues during token exchange
+• Server-side token validation errors
+
+[yellow]Troubleshooting Steps:[/yellow]
+1. Check server OAuth endpoint accessibility
+2. Verify client metadata and configuration
+3. Review server logs for token validation errors
+4. Try using Bearer token authentication as fallback""",
+                            title="🔧 Token Exchange Error",
+                            border_style="red",
+                        )
+                    else:
+                        # Generic error with enhanced context
+                        error_panel = Panel(
+                            f"""[red]❌ OAuth Setup Failed[/red]
+
+{oauth_error["description"]}
+
+[yellow]Exception Type:[/yellow] {exception_type}
+
+[yellow]Suggested Solution:[/yellow]
+{oauth_error["suggested_action"]}
+
+[yellow]Full Error Details:[/yellow]
+{error_details}""",
+                            title="🔧 Authentication Error",
+                            border_style="red",
+                        )
 
                 console.print()
                 console.print(error_panel)
                 console.print()
 
                 # Log full traceback for debugging (only in verbose mode if available)
-                traceback.print_exc()
+                if hasattr(e, "__cause__") or hasattr(e, "__context__"):
+                    traceback.print_exc()
 
-                raise RuntimeError(f"OAuth authentication failed: {e!s}") from e
+                raise RuntimeError(
+                    f"OAuth authentication failed: {oauth_error['error']} - {oauth_error['description']}"
+                ) from e
 
         # Prepare headers with authentication for basic HTTP
         headers = {}
@@ -834,6 +1006,25 @@ There was an issue processing the OAuth authorization callback.
             )
         except Exception:
             return []
+
+    def get_session(self, server_id: str) -> ClientSession | None:
+        """Get the MCP session for a specific server.
+
+        Args:
+            server_id: Server identifier from connect_server()
+
+        Returns:
+            ClientSession instance if connected, None if not found or unhealthy
+        """
+        connection = self.connections.get(server_id)
+        if not connection:
+            return None
+
+        # Return session only if connection is healthy
+        if connection._is_healthy and connection.session:
+            return connection.session
+
+        return None
 
     async def execute_tool(
         self, server_id: str, tool_name: str, arguments: dict[str, Any]
