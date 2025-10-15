@@ -29,7 +29,11 @@ class CommandTracker:
             return command
 
         # Replace full path to mcp-t executable with just "mcp-t"
-        if parts[0].endswith("/mcp-t") or parts[0].endswith("\\mcp-t") or "mcp-t" in parts[0]:
+        if (
+            parts[0].endswith("/mcp-t")
+            or parts[0].endswith("\\mcp-t")
+            or "mcp-t" in parts[0]
+        ):
             parts[0] = "mcp-t"
 
         # Process remaining arguments to remove sensitive paths
@@ -39,7 +43,9 @@ class CommandTracker:
             # Replace user home directories
             sanitized_part = re.sub(r"/Users/[^/\s]+", "~", part)
             # Replace other absolute paths that might be sensitive
-            sanitized_part = re.sub(r"/[a-zA-Z0-9._-]+/[a-zA-Z0-9._/-]+/bin/", "", sanitized_part)
+            sanitized_part = re.sub(
+                r"/[a-zA-Z0-9._-]+/[a-zA-Z0-9._/-]+/bin/", "", sanitized_part
+            )
             # Keep the argument if it's not empty after sanitization
             if sanitized_part.strip():
                 sanitized_parts.append(sanitized_part.strip())
