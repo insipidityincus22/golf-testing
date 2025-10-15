@@ -17,10 +17,10 @@ from .test_models import (
 __all__ = [
     # Models
     "TestCase",
-    "TestSuite",
     "TestExecution",
+    "TestResult",
     "TestRun",
     "TestStatus",
-    "TestResult",
+    "TestSuite",
     "ToolCall",
 ]

@@ -110,7 +110,9 @@ class OpenAIClientWrapper:
             Tuple of (parsed_data, raw_response)
         """
         try:
-            raw_response = self.create_completion(messages, max_tokens, temperature, json_mode)
+            raw_response = self.create_completion(
+                messages, max_tokens, temperature, json_mode
+            )
 
             try:
                 parsed_data = self.parse_json_response(raw_response)

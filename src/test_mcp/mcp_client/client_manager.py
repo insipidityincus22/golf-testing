@@ -398,7 +398,7 @@ The authorization process is in progress:
                 ) from e
 
     def _build_client_metadata(
-        self, oauth_metadata: dict = None
+        self, oauth_metadata: dict | None = None
     ) -> OAuthClientMetadata:
         """Build OAuth client metadata using hardcoded testing defaults"""
 

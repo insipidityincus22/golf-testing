@@ -104,14 +104,17 @@ class TestGenerator:
         """
         if "tool" in test_spec:
             # Only include the specific tool being tested
-            tool = next((t for t in context.mcp_tools if t.name == test_spec["tool"]), None)
+            tool = next(
+                (t for t in context.mcp_tools if t.name == test_spec["tool"]), None
+            )
             if tool:
                 return f"### Tool Being Tested:\n{self._format_single_tool(tool)}"
             return ""
         elif "resource" in test_spec:
             # Only include the specific resource being tested
             resource = next(
-                (r for r in context.mcp_resources if r.name == test_spec["resource"]), None
+                (r for r in context.mcp_resources if r.name == test_spec["resource"]),
+                None,
             )
             if resource:
                 return f"### Resource Being Tested:\n{self._format_single_resource(resource)}"
@@ -143,7 +146,9 @@ class TestGenerator:
         targeted_context = self._build_targeted_context(test_spec, context)
 
         # Simplified test requirements
-        user_intent_line = f"Focus: {request.user_intent}" if request.user_intent else ""
+        user_intent_line = (
+            f"Focus: {request.user_intent}" if request.user_intent else ""
+        )
 
         # Build specific test instructions based on spec
         test_description = self._get_test_spec_description(test_spec)
@@ -536,7 +541,9 @@ CRITICAL: success_criteria must be a single string, NOT an array of strings. Com
         if tool.description:
             result += f"Description: {tool.description}\n"
         if tool.input_schema:
-            result += f"Schema: {json.dumps(tool.input_schema, separators=(',', ':'))}\n"
+            result += (
+                f"Schema: {json.dumps(tool.input_schema, separators=(',', ':'))}\n"
+            )
         return result
 
     def _format_single_resource(self, resource) -> str:
@@ -558,9 +565,7 @@ CRITICAL: success_criteria must be a single string, NOT an array of strings. Com
                     tools_section += f"Description: {tool.description}\n"
                 if tool.input_schema:
                     # Compact JSON formatting (no indentation)
-                    tools_section += (
-                        f"Schema: {json.dumps(tool.input_schema, separators=(',', ':'))}\n"
-                    )
+                    tools_section += f"Schema: {json.dumps(tool.input_schema, separators=(',', ':'))}\n"
         return tools_section
 
     def _format_resources_section(self, context: ServerContext) -> str:
