@@ -25,6 +25,7 @@ class OpenAIClientWrapper:
         messages: list[dict[str, str]],
         max_tokens: int = 1000,
         temperature: float = 0.1,
+        json_mode: bool = True,
     ) -> str:
         """
         Create OpenAI completion with consistent handling across all testing modules.
@@ -33,6 +34,7 @@ class OpenAIClientWrapper:
             messages: List of message dictionaries with 'role' and 'content'
             max_tokens: Maximum completion tokens
             temperature: Temperature for non-o3 models (ignored for o3 models)
+            json_mode: Enable JSON response format (default: True)
 
         Returns:
             Raw response content from OpenAI
@@ -46,6 +48,10 @@ class OpenAIClientWrapper:
         # Only add temperature for non-o3 models (o3 models only support default temperature)
         if not self.model.startswith("o3"):
             api_params["temperature"] = temperature
+
+        # Enable JSON mode for structured responses
+        if json_mode:
+            api_params["response_format"] = {"type": "json_object"}
 
         try:
             response = self.client.chat.completions.create(**api_params)
@@ -72,15 +78,15 @@ class OpenAIClientWrapper:
         Raises:
             json.JSONDecodeError: If JSON parsing fails
         """
-        # Remove markdown code blocks if present
         json_str = raw_response.strip()
 
+        # Remove markdown code blocks if present
         if "```json" in json_str:
-            json_str = json_str.split("```json")[1].split("```")[0]
+            json_str = json_str.split("```json")[1].split("```")[0].strip()
         elif "```" in json_str:
-            json_str = json_str.split("```")[1].split("```")[0]
+            json_str = json_str.split("```")[1].split("```")[0].strip()
 
-        return json.loads(json_str.strip())
+        return json.loads(json_str)
 
     def create_completion_with_json_parsing(
         self,
@@ -88,6 +94,7 @@ class OpenAIClientWrapper:
         max_tokens: int = 1000,
         temperature: float = 0.1,
         fallback_data: dict[str, Any] | None = None,
+        json_mode: bool = True,
     ) -> tuple[dict[str, Any], str]:
         """
         Complete workflow: API call + JSON parsing with fallback handling.
@@ -97,12 +104,13 @@ class OpenAIClientWrapper:
             max_tokens: Maximum completion tokens
             temperature: Temperature for non-o3 models
             fallback_data: Default data to return if JSON parsing fails
+            json_mode: Enable JSON response format (default: True)
 
         Returns:
             Tuple of (parsed_data, raw_response)
         """
         try:
-            raw_response = self.create_completion(messages, max_tokens, temperature)
+            raw_response = self.create_completion(messages, max_tokens, temperature, json_mode)
 
             try:
                 parsed_data = self.parse_json_response(raw_response)
