@@ -21,8 +21,9 @@ class TestGenerator:
         """Clean common JSON issues from LLM-generated content"""
         # Remove trailing commas before closing brackets/braces
         json_str = re.sub(r",(\s*[}\]])", r"\1", json_str)
-        # Remove comments (// and /* */)
-        json_str = re.sub(r"//.*?$", "", json_str, flags=re.MULTILINE)
+        # Remove comments (// and /* */) but NOT URLs (e.g., https://)
+        # Only remove // if it's not preceded by : (to avoid matching URLs)
+        json_str = re.sub(r"(?<!:)//.*?$", "", json_str, flags=re.MULTILINE)
         json_str = re.sub(r"/\*.*?\*/", "", json_str, flags=re.DOTALL)
         return json_str
 
@@ -51,7 +52,7 @@ class TestGenerator:
         try:
             response = self.client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=4000,
+                max_tokens=8000,  # Increased to handle 30+ test cases with detailed descriptions
                 temperature=0.3,  # Slightly creative but consistent
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -100,6 +101,13 @@ class TestGenerator:
 
             # Clean common JSON issues
             result_text = self._clean_json(result_text)
+
+            # Check if JSON appears incomplete (doesn't end with ] or has unmatched braces)
+            if not result_text.rstrip().endswith("]"):
+                self.logger.warning(
+                    "JSON response appears incomplete (doesn't end with ]). "
+                    "Response may have been truncated due to token limits."
+                )
 
             self.logger.debug(f"Parsing test JSON (length: {len(result_text)})")
             tests_data = json.loads(result_text)
@@ -160,6 +168,13 @@ class TestGenerator:
                 f.write("EXTRACTED JSON (after processing):\n")
                 f.write("=" * 80 + "\n")
                 f.write(result_text)
+                f.write("\n\n")
+                f.write("=" * 80 + "\n")
+                f.write("DIAGNOSTIC INFO:\n")
+                f.write("=" * 80 + "\n")
+                f.write(f"Response length: {len(result_text)} characters\n")
+                f.write(f"Ends with ']': {result_text.rstrip().endswith(']')}\n")
+                f.write(f"Likely truncated: {not result_text.rstrip().endswith(']')}\n")
 
             # Show context around error location
             if hasattr(e, "pos"):
@@ -170,6 +185,13 @@ class TestGenerator:
 
                 self.logger.error(f"Context around error position {error_pos}:")
                 self.logger.error(f"...{context}...")
+
+            # Provide helpful diagnostic message
+            if not result_text.rstrip().endswith("]"):
+                self.logger.error(
+                    "Response appears truncated. This may indicate max_tokens is too low "
+                    "for the number of test cases requested."
+                )
 
             self.logger.error(f"Full response saved to: {debug_file}")
             self.logger.debug(f"Response preview: {result_text[:500]}...")
@@ -265,7 +287,7 @@ class TestGenerator:
 Generate {num_tests} comprehensive conversational test cases that:
 
 **Coverage Requirements:**
-- Create 6 tests for EACH tool: 
+- Create 6 tests for EACH tool:
   1. ONE happy path test (valid inputs, successful execution)
   2. FIVE edge case tests covering:
      - Invalid input parameters
