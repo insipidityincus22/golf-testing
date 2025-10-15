@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 
 import anthropic
 
@@ -15,6 +16,15 @@ class TestGenerator:
     def __init__(self, anthropic_api_key: str):
         self.client = anthropic.Anthropic(api_key=anthropic_api_key)
         self.logger = logging.getLogger(__name__)
+
+    def _clean_json(self, json_str: str) -> str:
+        """Clean common JSON issues from LLM-generated content"""
+        # Remove trailing commas before closing brackets/braces
+        json_str = re.sub(r",(\s*[}\]])", r"\1", json_str)
+        # Remove comments (// and /* */)
+        json_str = re.sub(r"//.*?$", "", json_str, flags=re.MULTILINE)
+        json_str = re.sub(r"/\*.*?\*/", "", json_str, flags=re.DOTALL)
+        return json_str
 
     async def generate_tests(
         self, request: GenerationRequest, context: ServerContext, status=None
@@ -54,16 +64,42 @@ class TestGenerator:
             result_text = response.content[0].text if response.content else "[]"
 
             # Parse JSON response - extract JSON from markdown if needed
+            original_text = result_text
             if "```json" in result_text:
                 # Extract JSON from markdown code block
                 start = result_text.find("```json") + 7
                 end = result_text.find("```", start)
-                result_text = result_text[start:end].strip()
+                if end == -1:
+                    self.logger.warning(
+                        "Found ```json but no closing ```, using rest of text"
+                    )
+                    result_text = result_text[start:].strip()
+                else:
+                    result_text = result_text[start:end].strip()
             elif "```" in result_text:
                 # Extract from generic code block
                 start = result_text.find("```") + 3
                 end = result_text.find("```", start)
-                result_text = result_text[start:end].strip()
+                if end == -1:
+                    self.logger.warning(
+                        "Found ``` but no closing ```, using rest of text"
+                    )
+                    result_text = result_text[start:].strip()
+                else:
+                    result_text = result_text[start:end].strip()
+
+            # Try to find JSON array if there's extra text
+            if not result_text.strip().startswith("["):
+                self.logger.warning(
+                    "Response doesn't start with '[', trying to find JSON array"
+                )
+                array_start = result_text.find("[")
+                if array_start != -1:
+                    result_text = result_text[array_start:]
+                    self.logger.info(f"Found JSON array at position {array_start}")
+
+            # Clean common JSON issues
+            result_text = self._clean_json(result_text)
 
             self.logger.debug(f"Parsing test JSON (length: {len(result_text)})")
             tests_data = json.loads(result_text)
@@ -103,7 +139,40 @@ class TestGenerator:
 
         except json.JSONDecodeError as e:
             self.logger.error(f"Failed to parse generated tests JSON: {e}")
-            self.logger.debug(f"Response was: {result_text[:1000]}")
+
+            # Save full response to debug file
+            import os
+            from datetime import datetime
+
+            debug_dir = "test_results/debug"
+            os.makedirs(debug_dir, exist_ok=True)
+            debug_file = os.path.join(
+                debug_dir, f"json_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            )
+            with open(debug_file, "w") as f:
+                f.write(f"JSON Parse Error: {e}\n")
+                f.write("=" * 80 + "\n")
+                f.write("ORIGINAL Claude Response:\n")
+                f.write("=" * 80 + "\n")
+                f.write(original_text if "original_text" in locals() else result_text)
+                f.write("\n\n")
+                f.write("=" * 80 + "\n")
+                f.write("EXTRACTED JSON (after processing):\n")
+                f.write("=" * 80 + "\n")
+                f.write(result_text)
+
+            # Show context around error location
+            if hasattr(e, "pos"):
+                error_pos = e.pos
+                context_start = max(0, error_pos - 200)
+                context_end = min(len(result_text), error_pos + 200)
+                context = result_text[context_start:context_end]
+
+                self.logger.error(f"Context around error position {error_pos}:")
+                self.logger.error(f"...{context}...")
+
+            self.logger.error(f"Full response saved to: {debug_file}")
+            self.logger.debug(f"Response preview: {result_text[:500]}...")
             return []
         except Exception as e:
             self.logger.error(f"Test generation failed: {e}")
