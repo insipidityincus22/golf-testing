@@ -88,6 +88,16 @@ class ResearchAgent:
             except Exception as e:
                 self.logger.debug(f"No resources available: {e}")
 
+            # Discover prompts
+            try:
+                prompts = await self.mcp_client.get_prompts_for_llm([server_id])
+                for prompt in prompts:
+                    prompt_name = prompt.get("name", "")
+                    if prompt_name:
+                        context.mcp_prompts.append(prompt_name)
+            except Exception as e:
+                self.logger.debug(f"No prompts available: {e}")
+
         except Exception as e:
             self.logger.error(f"MCP introspection failed: {e}")
             raise
@@ -514,6 +524,7 @@ Return only valid JSON, no other text."""
 
         tools_summary = f"{len(context.mcp_tools)} tools"
         resources_summary = f"{len(context.mcp_resources)} resources"
+        prompts_summary = f"{len(context.mcp_prompts)} prompts"
         docs_summary = f"{len(context.documentation_content)} documentation sources"
 
         web_summary = ""
@@ -522,7 +533,7 @@ Return only valid JSON, no other text."""
 
         return (
             f"Research complete: {tools_summary}, {resources_summary}, "
-            f"{docs_summary}{web_summary}"
+            f"{prompts_summary}, {docs_summary}{web_summary}"
         )
 
     async def cleanup(self):

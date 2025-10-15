@@ -376,6 +376,17 @@ Return a JSON array of test cases. Each test case must have:
     }}
   }},
   {{
+    "test_id": "summarize_code_prompt",
+    "user_message": "Please use the 'summarize_code' prompt to help me understand this function",
+    "success_criteria": "Agent successfully invokes the MCP prompt and provides helpful code summary",
+    "max_turns": 5,
+    "context_persistence": true,
+    "metadata": {{
+      "prompt_name": "summarize_code",
+      "test_type": "happy_path"
+    }}
+  }},
+  {{
     "test_id": "multi_tool_integration",
     "user_message": "I need to fetch data from multiple sources and compare them",
     "success_criteria": "Agent uses multiple tools in sequence, handles results properly",
