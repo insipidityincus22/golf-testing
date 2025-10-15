@@ -177,9 +177,7 @@ class TestMCPComplianceIntegration:
     @pytest.mark.asyncio
     async def test_error_handling_connection_failure(self, server_config):
         """Test error handling when connection fails"""
-        with patch(
-            "test_mcp.testing.compliance.mcp_compliance_tester.ClientSession"
-        ):
+        with patch("test_mcp.testing.compliance.mcp_compliance_tester.ClientSession"):
             tester = MCPComplianceTester(server_config)
 
             # Mock connection failure

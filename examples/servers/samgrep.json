@@ -1,0 +1,5 @@
+{
+  "name": "samgrep",
+  "transport": "http",
+  "url": "https://mcp.semgrep.ai/mcp"
+}

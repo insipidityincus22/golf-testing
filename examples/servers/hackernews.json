@@ -1,0 +1,5 @@
+{
+  "name": "hackernews",
+  "transport": "http",
+  "url": "https://no-auth-server.courier-mcp.authed-qukc4.ryvn.run/mcp/"
+}
