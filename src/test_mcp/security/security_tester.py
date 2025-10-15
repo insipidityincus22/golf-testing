@@ -173,7 +173,8 @@ class MCPSecurityTester:
             test_server_id = await test_client.connect_server(test_config)
 
             # Check if connection was successful
-            if test_client.get_session(test_server_id):
+            connection = test_client.connections.get(test_server_id)
+            if connection and connection.session and connection._is_healthy:
                 # Clean up test connection
                 await test_client.disconnect_server(test_server_id)
                 return True
