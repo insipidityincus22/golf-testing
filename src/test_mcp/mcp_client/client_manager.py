@@ -272,6 +272,7 @@ class MCPClientManager:
         self._active_contexts: dict[str, Any] = {}
         self._connection_locks: dict[str, asyncio.Lock] = {}
         self._stdio_processes: dict[str, Any] = {}  # Track stdio subprocesses
+        self._current_oauth_url: str | None = None  # Store current OAuth URL
 
     def _parse_command(self, command_str: str) -> tuple[str, list[str]]:
         """
@@ -294,6 +295,9 @@ class MCPClientManager:
         from rich.panel import Panel
 
         console = Console()
+        
+        # Store the auth_url for later use in callback
+        self._current_oauth_url = auth_url
 
         # Create authorization panel
         auth_panel = Panel(
@@ -330,11 +334,16 @@ Please visit this URL to authorize the MCP Testing Framework:
 
         console.print()
 
-    async def _handle_oauth_callback(self, auth_url: str) -> tuple[str, str | None]:
+    async def _handle_oauth_callback(self) -> tuple[str, str | None]:
         """Handle OAuth callback by starting local server and waiting for redirect"""
         from rich.console import Console
 
         console = Console()
+        
+        # Use the stored auth_url from the redirect handler
+        auth_url = self._current_oauth_url
+        if not auth_url:
+            raise RuntimeError("No OAuth URL available - redirect handler may not have been called")
 
         # Start callback server with dynamic port
         callback_server = CallbackServer()  # Will find free port automatically
