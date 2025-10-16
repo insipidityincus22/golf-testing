@@ -262,10 +262,10 @@ class MCPSecurityTester:
                     if hasattr(resources_response, "resources")
                     else []
                 )
-            except Exception as e:
+            except Exception:
                 self.available_resources = []
 
-        except Exception as e:
+        except Exception:
             # Only set empty lists for genuine feature support issues
             self.available_tools = []
             self.available_resources = []
