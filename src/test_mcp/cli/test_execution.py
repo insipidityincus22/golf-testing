@@ -500,8 +500,12 @@ async def execute_test_cases(
 
     # ========== END NEW LOGIC ==========
 
-    # Clean up shared OAuth token storage after test suite completes
-    SharedTokenStorage.clear_all()
+    # Use async token cleanup to prevent race conditions
+    try:
+        await SharedTokenStorage.clear_all_async()
+    except Exception as e:
+        # Log cleanup errors but don't fail the test
+        console.print(f"[yellow]⚠️  Token cleanup warning: {e}[/yellow]")
 
     # Return final results (existing format preserved)
     return {
