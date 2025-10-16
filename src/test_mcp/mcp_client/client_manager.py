@@ -65,7 +65,8 @@ class SharedTokenStorage(TokenStorage):
         self.server_url = server_url
         self.tokens: OAuthToken | None = None
         self.client_info: OAuthClientInformationFull | None = None
-        self._instance_lock = threading.Lock()  # Instance-level lock
+        self._instance_lock = threading.Lock()
+        self._cleanup_event = threading.Event()
 
     @classmethod
     def get_instance(cls, server_url: str) -> "SharedTokenStorage":
@@ -77,8 +78,16 @@ class SharedTokenStorage(TokenStorage):
 
     @classmethod
     def clear_all(cls) -> None:
-        """Clear all shared token storage instances."""
+        """Clear all shared token storage instances and their data."""
         with cls._lock:
+            # First, clear token data from all existing instances
+            for instance in cls._instances.values():
+                with instance._instance_lock:
+                    instance.tokens = None
+                    instance.client_info = None
+                    instance._cleanup_event.set()  # Signal cleanup completed
+            
+            # Then clear the instance registry
             cls._instances.clear()
 
     async def get_tokens(self) -> OAuthToken | None:
@@ -101,6 +110,41 @@ class SharedTokenStorage(TokenStorage):
         with self._instance_lock:
             self.client_info = client_info
 
+    @classmethod
+    async def clear_all_async(cls) -> None:
+        """Async version of clear_all for proper cleanup during OAuth flows."""
+        instances_to_clear = []
+        with cls._lock:
+            instances_to_clear = list(cls._instances.values())
+            cls._instances.clear()
+        
+        # Clear each instance's data outside the class lock to prevent deadlocks
+        for instance in instances_to_clear:
+            with instance._instance_lock:
+                instance.tokens = None
+                instance.client_info = None
+                instance._cleanup_event.set()
+        
+        # Wait for all cleanup to complete
+        await asyncio.gather(*[
+            asyncio.get_event_loop().run_in_executor(
+                None, lambda i=instance: i._cleanup_event.wait(timeout=1.0)
+            ) for instance in instances_to_clear
+        ])
+    
+    async def get_valid_token(self) -> OAuthToken | None:
+        """Get valid token with cleanup synchronization."""
+        with self._instance_lock:
+            if self._cleanup_event.is_set():
+                return None  # Instance was cleaned up
+            return self.tokens
+    
+    async def save_token(self, token: OAuthToken) -> None:
+        """Save token with cleanup synchronization."""
+        with self._instance_lock:
+            if not self._cleanup_event.is_set():
+                self.tokens = token
+    
     def has_valid_tokens(self) -> bool:
         """Check if we have valid tokens stored."""
         with self._instance_lock:
@@ -192,24 +236,31 @@ class CallbackServer:
         self.server = None
         self.thread = None
         self.callback_data = None
-        # Event-based synchronization
+        # Improved synchronization
         self.callback_event = threading.Event()
         self.callback_lock = threading.Lock()
+        self.server_ready = threading.Event()  # ← Track server readiness
+        self.shutdown_requested = threading.Event()
 
     def start(self):
-        """Start the callback server in a background thread."""
+        """Start the callback server with proper synchronization."""
         try:
             self.server = HTTPServer(("localhost", self.port), CallbackHandler)
             self.server.callback_data = None
-            self.server.callback_server_ref = (
-                self  # Allow handler to access this instance
-            )
-            self.thread = threading.Thread(
-                target=self.server.serve_forever, daemon=True
-            )
+            self.server.callback_server_ref = self
+            
+            def server_thread():
+                self.server_ready.set()  # Signal server is ready
+                self.server.serve_forever()
+            
+            self.thread = threading.Thread(target=server_thread, daemon=True)
             self.thread.start()
+            
+            # Wait for server to be ready before returning
+            if not self.server_ready.wait(timeout=5.0):
+                raise RuntimeError("Callback server failed to start within 5 seconds")
+                
         except OSError as e:
-            # Port might have been taken between discovery and binding
             if "Address already in use" in str(e):
                 self.port = find_free_port(self.port + 1)
                 self.start()  # Retry with new port
@@ -217,19 +268,24 @@ class CallbackServer:
                 raise
 
     def stop(self):
-        """Stop the callback server."""
+        """Stop the callback server gracefully."""
         if self.server:
+            self.shutdown_requested.set()
             self.server.shutdown()
             self.server.server_close()
-        if self.thread:
-            self.thread.join(timeout=1)
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=2.0)
 
     def wait_for_callback(self, timeout: float = 120.0) -> dict[str, Any] | None:
-        """Wait for OAuth callback with event-based synchronization."""
+        """Wait for OAuth callback with improved timeout handling."""
+        # Ensure server is ready before waiting
+        if not self.server_ready.is_set():
+            raise RuntimeError("Callback server not ready")
+        
         # Wait for callback event with timeout
         if self.callback_event.wait(timeout):
             with self.callback_lock:
-                return self.callback_data
+                return self.callback_data.copy() if self.callback_data else None
         return None  # Timeout
 
     def set_callback_data(self, data: dict[str, Any]) -> None:
@@ -294,8 +350,11 @@ class MCPClientManager:
 
         console = Console()
         
-        # Store the auth_url for later use in callback
-        self._current_oauth_url = auth_url
+        # Thread-safe storage of auth URL
+        with threading.Lock():
+            self._current_oauth_url = auth_url
+            self._oauth_redirect_completed = threading.Event()
+            self._oauth_redirect_completed.set()  # Signal URL is stored
 
         # Create authorization panel
         auth_panel = Panel(
@@ -332,65 +391,33 @@ Please visit this URL to authorize the MCP Testing Framework:
 
         console.print()
 
-    async def _handle_oauth_callback(self) -> tuple[str, str | None]:
-        """Handle OAuth callback by starting local server and waiting for redirect"""
-        from rich.console import Console
 
+    async def _handle_oauth_callback(self) -> tuple[str, str | None]:
+        """Handle OAuth callback using pre-allocated callback server."""
+        callback_server = self._active_callback_server
+        from rich.console import Console
         console = Console()
         
-        # Use the stored auth_url from the redirect handler
-        auth_url = self._current_oauth_url
-        if not auth_url:
-            raise RuntimeError("No OAuth URL available - redirect handler may not have been called")
-
-        # Start callback server with dynamic port
-        callback_server = CallbackServer()  # Will find free port automatically
-
-        try:
-            callback_server.start()
-
-            # Update auth_url to use actual callback port
-            callback_url = callback_server.get_callback_url()
-
-            console.print("\n🌐 [bold green]OAuth Authorization Required[/bold green]")
-            console.print(f"📍 Local callback server: [cyan]{callback_url}[/cyan]")
-            console.print(
-                f"🔗 Authorization URL: [cyan][link={auth_url}]{auth_url}[/link][/cyan]\n"
-            )
-
-            # Open browser to auth URL
-            await self._handle_oauth_redirect(auth_url)
-
-            # Wait for callback with timeout
-            callback_data = callback_server.wait_for_callback(timeout=120.0)
-
-            if not callback_data:
-                console.print(
-                    "[red]❌ OAuth callback timeout. Authorization may have failed or taken too long.[/red]"
-                )
-                raise RuntimeError("OAuth callback timeout")
-
-            if callback_data.get("error"):
-                error_msg = callback_data.get(
-                    "error_description", callback_data.get("error")
-                )
-                console.print(f"[red]❌ OAuth authorization failed: {error_msg}[/red]")
-                raise RuntimeError(f"OAuth authorization error: {error_msg}")
-
-            if not callback_data.get("code"):
-                console.print(
-                    "[red]❌ No authorization code received in callback[/red]"
-                )
-                raise RuntimeError("No authorization code in OAuth callback")
-
-            return callback_data["code"], callback_data.get("state")
-
-        except KeyboardInterrupt:
-            console.print("\n[yellow]⏹️  OAuth flow cancelled by user[/yellow]")
-            raise
-        finally:
-            # Always clean up the callback server
-            callback_server.stop()
+        console.print(f"\n📍 Waiting for OAuth callback on: [cyan]{callback_server.get_callback_url()}[/cyan]")
+        
+        # Wait for callback with timeout
+        callback_data = callback_server.wait_for_callback(timeout=120.0)
+        
+        if not callback_data:
+            console.print("[red]❌ OAuth callback timeout. Authorization may have failed.[/red]")
+            raise RuntimeError("OAuth callback timeout")
+            
+        if callback_data.get("error"):
+            error_msg = callback_data.get("error_description", callback_data.get("error"))
+            console.print(f"[red]❌ OAuth authorization failed: {error_msg}[/red]")
+            raise RuntimeError(f"OAuth authorization error: {error_msg}")
+            
+        if not callback_data.get("code"):
+            console.print("[red]❌ No authorization code received in callback[/red]")
+            raise RuntimeError("No authorization code in OAuth callback")
+            
+        console.print("[green]✅ OAuth authorization successful[/green]")
+        return callback_data["code"], callback_data.get("state")
 
     async def _discover_oauth_metadata(self, server_url: str) -> dict[str, Any]:
         """
@@ -706,13 +733,23 @@ Please visit this URL to authorize the MCP Testing Framework:
             except Exception:
                 oauth_metadata = None
 
-            # Create client metadata using hardcoded parameters
-            client_metadata = self._build_client_metadata(oauth_metadata)
-
-            # Create shared token storage and OAuth provider
-            token_storage = SharedTokenStorage.get_instance(url)
+            # Pre-allocate callback server to ensure consistent port
+            callback_server = CallbackServer()
+            callback_server.start()
 
             try:
+                # Use callback server's actual port in metadata
+                client_metadata = self._build_client_metadata(
+                    oauth_metadata, 
+                    callback_port=callback_server.port  # ← Use same port
+                )
+
+                # Store callback server for use in callback handler
+                self._active_callback_server = callback_server
+
+                # Create shared token storage and OAuth provider
+                token_storage = SharedTokenStorage.get_instance(url)
+
                 oauth_auth = OAuthClientProvider(
                     server_url=url,
                     client_metadata=client_metadata,
@@ -730,11 +767,16 @@ Please visit this URL to authorize the MCP Testing Framework:
                     client_info = Implementation(
                         name="mcp-testing-framework", version="1.0.0"
                     )
-                    async with ClientSession(
-                        read_stream, write_stream, client_info=client_info
-                    ) as session:
-                        await asyncio.wait_for(session.initialize(), timeout=30.0)
-                        yield session
+                    try:
+                        async with ClientSession(
+                            read_stream, write_stream, client_info=client_info
+                        ) as session:
+                            await asyncio.wait_for(session.initialize(), timeout=30.0)
+                            yield session
+                    finally:
+                        # Clean up callback server after session is done
+                        self._active_callback_server.stop()
+                        delattr(self, '_active_callback_server')
                 return
             except Exception as e:
                 import traceback
@@ -852,6 +894,11 @@ The OAuth authorization code was received but token exchange failed.
                 raise RuntimeError(
                     f"OAuth authentication failed: {oauth_error['error']} - {oauth_error['description']}"
                 ) from e
+            except Exception:
+                # Clean up callback server on authentication failure
+                self._active_callback_server.stop()
+                delattr(self, '_active_callback_server')
+                raise
 
         # Prepare headers with authentication for basic HTTP
         headers = {}
