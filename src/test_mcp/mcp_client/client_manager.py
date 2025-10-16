@@ -746,15 +746,15 @@ Please visit this URL to authorize the MCP Testing Framework:
             callback_server = CallbackServer()
             callback_server.start()
 
+            # Store callback server immediately to ensure cleanup works
+            self._active_callback_server = callback_server
+
             try:
                 # Use callback server's actual port in metadata
                 client_metadata = self._build_client_metadata(
                     oauth_metadata,
                     callback_port=callback_server.port,  # ← Use same port
                 )
-
-                # Store callback server for use in callback handler
-                self._active_callback_server = callback_server
 
                 # Create shared token storage and OAuth provider
                 token_storage = SharedTokenStorage.get_instance(url)
