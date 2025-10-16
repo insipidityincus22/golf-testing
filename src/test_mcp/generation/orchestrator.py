@@ -57,8 +57,9 @@ class TestGenerationOrchestrator:
 
             if not tests:
                 raise ValueError(
-                    "No tests were generated. Check logs for details. "
-                    "This may be due to API issues or invalid server configuration."
+                    "No tests were generated successfully. Check logs for details. "
+                    "This may be due to API issues, invalid server configuration, "
+                    "or problems with individual test generation."
                 )
 
             # Create test suite - use suite_id from request as both ID and name

@@ -19,8 +19,8 @@ class RateLimiter:
     def __init__(self) -> None:
         # Updated to realistic API limits (conservative defaults for reliable operation)
         self.providers = {
-            "anthropic": {"requests_per_minute": 50, "tokens_per_minute": 10000},
-            "openai": {"requests_per_minute": 500, "tokens_per_minute": 30000},
+            "anthropic": {"requests_per_minute": 500, "tokens_per_minute": 100000},
+            "openai": {"requests_per_minute": 500, "tokens_per_minute": 100000},
             "gemini": {"requests_per_minute": 60, "tokens_per_minute": 8000},
         }
         self.request_history: dict[str, deque] = defaultdict(deque)
@@ -32,8 +32,8 @@ class RateLimiter:
     async def acquire_request_slot(self, provider: str) -> str:
         """Acquire permission to make API request and return correlation ID"""
         limits = self.providers.get(provider, {})
-        rpm_limit = limits.get("requests_per_minute", 50)
-        tpm_limit = limits.get("tokens_per_minute", 40000)
+        rpm_limit = limits.get("requests_per_minute", 500)
+        tpm_limit = limits.get("tokens_per_minute", 100000)
 
         now = time.time()
         self._clean_old_requests(provider, now)

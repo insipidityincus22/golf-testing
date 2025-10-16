@@ -1,0 +1,14 @@
+{
+  "suite_id": "basic-test",
+  "name": "basic-test",
+  "test_type": "basic",
+  "test_cases": [
+    {
+      "test_id": "test_1",
+      "user_message": "Can you tell me what is your purpose?",
+      "success_criteria": "The agent should respond to me what is their purpose.",
+      "timeout_seconds": 60
+    }
+  ],
+  "created_at": "2025-10-15T11:20:25.024399"
+}

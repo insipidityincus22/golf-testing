@@ -183,7 +183,7 @@ def write_test_results(run_id: str, test_run, evaluations, summary):
     return run_file, None, None
 
 
-def handle_connection_error(error: Exception, server_url: str = None) -> str:
+def handle_connection_error(error: Exception, server_url: str | None = None) -> str:
     """Convert connection errors to user-friendly messages"""
     error_msg = str(error).lower()
 
@@ -224,7 +224,10 @@ def handle_async_error(error: Exception, verbose: bool = False) -> str:
 
 
 def safe_run_async(
-    coro, error_context: str = None, server_url: str = None, verbose: bool = False
+    coro,
+    error_context: str | None = None,
+    server_url: str | None = None,
+    verbose: bool = False,
 ):
     """Safely run an async coroutine with proper error handling"""
     try:

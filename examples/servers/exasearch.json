@@ -1,0 +1,5 @@
+{
+  "name": "exasearch",
+  "transport": "http",
+  "url": "https://mcp.exa.ai/mcp"
+}

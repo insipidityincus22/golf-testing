@@ -1,0 +1,5 @@
+{
+  "name": "coingecko",
+  "transport": "http",
+  "url": "https://mcp.api.coingecko.com/mcp"
+}

@@ -482,7 +482,7 @@ async def execute_test_cases(
     try:
         from .utils import write_test_results_with_location
 
-        run_file, eval_file = write_test_results_with_location(
+        run_file, _eval_file = write_test_results_with_location(
             run_id,
             test_run,
             [],
@@ -1154,7 +1154,7 @@ async def execute_standard_test_flow(
 
     # Build agent configuration
     console.print("Building agent configuration...")
-    anthropic_key, openai_key = validate_api_keys()
+    anthropic_key, _openai_key = validate_api_keys()
     agent_config = build_agent_config_from_server(server_config, anthropic_key)
 
     # Setup conversation configuration with suite parameters
@@ -1200,7 +1200,7 @@ async def execute_standard_test_flow(
         )
 
         # Process results and handle any execution errors
-        successful_results, error_results = handle_execution_errors(
+        _successful_results, _error_results = handle_execution_errors(
             test_results, suite_config
         )
 
@@ -1475,7 +1475,7 @@ async def execute_conversation_test_real(
 
     try:
         # Validate API keys
-        anthropic_key, openai_key = validate_api_keys()
+        anthropic_key, _openai_key = validate_api_keys()
         progress_tracker.update_simple_progress(test_id, "Connecting to server...")
 
         # Build agent config from server config (handle both dict and MCPServerConfig objects)

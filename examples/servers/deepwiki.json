@@ -1,0 +1,5 @@
+{
+  "name": "deepwiki",
+  "transport": "http",
+  "url": "https://mcp.deepwiki.com/mcp"
+}

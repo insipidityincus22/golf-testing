@@ -1023,7 +1023,7 @@ class MCPComplianceTester:
             tests_passed = 0
 
             # Test each advertised capability
-            for capability, _ in server_capabilities.items():
+            for capability in server_capabilities.keys():
                 tests_run += 1
 
                 try:
