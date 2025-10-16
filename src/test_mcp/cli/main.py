@@ -187,8 +187,16 @@ def mcpt_main() -> None:
         error_handler.handle_usage_error(e)
     except SystemExit as e:
         error_handler.handle_system_exit(e)
+    except click.Abort:
+        # Handle user interruption (Ctrl+C) - Click converts KeyboardInterrupt to Abort
+        console = get_console()
+        console.print("\n[dim]Operation cancelled by user[/dim]")
+        _handle_command_completion(start_time, exit_code=130)
+        sys.exit(130)
     except KeyboardInterrupt:
-        # Handle user interruption
+        # Handle user interruption (fallback, though Click usually catches this first)
+        console = get_console()
+        console.print("\n[dim]Operation cancelled by user[/dim]")
         _handle_command_completion(start_time, exit_code=130)
         sys.exit(130)
     except Exception as e:
