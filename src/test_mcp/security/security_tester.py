@@ -255,15 +255,18 @@ class MCPSecurityTester:
             )
 
             # Get available resources
-            resources_response = await self.session.list_resources()
-            self.available_resources = (
-                resources_response.resources
-                if hasattr(resources_response, "resources")
-                else []
-            )
+            try:
+                resources_response = await self.session.list_resources()
+                self.available_resources = (
+                    resources_response.resources
+                    if hasattr(resources_response, "resources")
+                    else []
+                )
+            except Exception as e:
+                self.available_resources = []
 
-        except Exception:
-            # Server may not support all features
+        except Exception as e:
+            # Only set empty lists for genuine feature support issues
             self.available_tools = []
             self.available_resources = []
 
