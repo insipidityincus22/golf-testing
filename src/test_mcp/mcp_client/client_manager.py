@@ -143,12 +143,10 @@ class CallbackHandler(BaseHTTPRequestHandler):
             self.send_header("Content-type", "text/html")
             self.end_headers()
 
-            success_message = """
-            <html><body style="font-family: Arial; text-align: center; padding: 50px;">
-                <h2 style="color: green;">✅ Authorization Successful!</h2>
+            success_message = """<html><body>
+                <h2>Authorization successful</h2>
                 <p>You can close this window and return to the MCP Testing Framework.</p>
-            </body></html>
-            """
+            </body></html>"""
             self.wfile.write(success_message.encode())
         else:
             # 404 for other paths
