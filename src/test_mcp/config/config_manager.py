@@ -339,7 +339,7 @@ class ConfigManager:
                 ),
                 SecurityTestConfig(
                     test_id="rate_limiting",
-                    auth_method="token",
+                    auth_method="oauth",
                     rate_limit_threshold=100,
                     vulnerability_checks=["rate_limit"],
                 ),
