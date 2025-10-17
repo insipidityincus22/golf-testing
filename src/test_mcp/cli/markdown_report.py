@@ -125,8 +125,15 @@ def _generate_single_test_detail(result: dict) -> str:
         "",
         f"**Status**: {status}  ",
         f"**Duration**: {duration:.2f}s  ",
-        f"**Message**: {message}  ",
     ]
+
+    # Wrap message in code block if it exists to prevent markdown injection
+    if message:
+        lines.append("**Message**:")
+        lines.append("```")
+        lines.append(message)
+        lines.append("```")
+        lines.append("")
 
     # Add conversation details if available
     details = result.get("details", {})
@@ -181,7 +188,11 @@ def _generate_conversation_details(conv: dict) -> list[str]:
             if len(message) > MAX_MESSAGE_LENGTH:
                 message = message[: MAX_MESSAGE_LENGTH - 3] + "..."
 
-            lines.append(f"**{speaker.upper()}**: {message}")
+            # Wrap message in code block to prevent markdown injection
+            lines.append(f"**{speaker.upper()}**:")
+            lines.append("```")
+            lines.append(message)
+            lines.append("```")
 
             if tool_calls:
                 for tool_call in tool_calls:
@@ -211,7 +222,12 @@ def _generate_compliance_details(compliance_results: list[dict]) -> list[str]:
         message = result.get("message", "")
 
         status = "✅" if passed else "❌"
-        lines.append(f"{status} **{check_name}** ({severity}): {message}")
+        lines.append(f"{status} **{check_name}** ({severity}):")
+        if message:
+            lines.append("```")
+            lines.append(message)
+            lines.append("```")
+        lines.append("")
 
     return lines
 
