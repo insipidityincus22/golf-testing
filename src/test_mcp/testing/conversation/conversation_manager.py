@@ -2,6 +2,7 @@ import logging
 import time
 import uuid
 from datetime import datetime
+from difflib import SequenceMatcher
 
 from ...agent.agent import ClaudeAgent
 from ...agent.config import load_agent_config
@@ -84,6 +85,52 @@ class ConversationManager:
                 if tool_call.tool_name not in conversation.tools_used:
                     conversation.tools_used.append(tool_call.tool_name)
 
+    def _detect_repetitive_pattern(
+        self, conversation: ConversationResult, window_size: int = 3
+    ) -> bool:
+        """Detect if agent is stuck in a repetitive pattern"""
+        if conversation.agent_turns < window_size:
+            return False
+
+        # Get last N agent messages
+        agent_messages = [
+            turn.message.lower()
+            for turn in conversation.turns[-window_size * 2 :]
+            if turn.speaker == "agent"
+        ][-window_size:]
+
+        # Check for highly similar consecutive messages
+        if len(agent_messages) >= window_size:
+            similarities = []
+            for i in range(len(agent_messages) - 1):
+                ratio = SequenceMatcher(
+                    None, agent_messages[i], agent_messages[i + 1]
+                ).ratio()
+                similarities.append(ratio)
+
+            # If 2+ consecutive messages are >70% similar, likely stuck
+            high_similarity_count = sum(1 for s in similarities if s > 0.7)
+            if high_similarity_count >= 2:
+                return True
+
+        return False
+
+    def _detect_error_loop(
+        self, conversation: ConversationResult, threshold: int = 3
+    ) -> bool:
+        """Detect if agent is repeatedly encountering errors"""
+        recent_turns = conversation.turns[-threshold * 2 :]
+        agent_turns = [turn for turn in recent_turns if turn.speaker == "agent"]
+
+        error_keywords = ["error", "apologize", "sorry", "mistake", "try again"]
+        error_count = sum(
+            1
+            for turn in agent_turns
+            if any(keyword in turn.message.lower() for keyword in error_keywords)
+        )
+
+        return error_count >= threshold
+
     async def run_conversation(self, test_case: TestCase) -> ConversationResult:
         """Run a complete conversation for a test case"""
 
@@ -120,8 +167,6 @@ class ConversationManager:
                     turn_duration = time.time() - turn_start_time
 
                     # Get tool calls directly from agent's stored results (already in ToolCall format)
-                    from ..core.test_models import ToolCall
-
                     tool_call_dicts = agent.get_recent_tool_results()
                     tool_calls = [
                         ToolCall(**call_dict) for call_dict in tool_call_dicts
@@ -152,6 +197,23 @@ class ConversationManager:
                     self.logger.info(
                         f"Agent responded ({turn_duration:.1f}s, {tool_count} tools)"
                     )
+
+                    # Detect stuck patterns
+                    if self._detect_repetitive_pattern(conversation):
+                        conversation.status = ConversationStatus.STUCK
+                        conversation.completion_reason = (
+                            "Agent appears stuck in repetitive response pattern"
+                        )
+                        self.logger.warning("STUCK: Detected repetitive pattern")
+                        break
+
+                    if self._detect_error_loop(conversation):
+                        conversation.status = ConversationStatus.STUCK
+                        conversation.completion_reason = (
+                            "Agent repeatedly encountering errors"
+                        )
+                        self.logger.warning("STUCK: Detected error loop")
+                        break
 
                 except Exception as e:
                     # Agent error

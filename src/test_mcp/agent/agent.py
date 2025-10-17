@@ -1,4 +1,6 @@
 import asyncio
+import json
+import re
 import time
 import uuid
 from typing import Any
@@ -8,6 +10,7 @@ from anthropic import APIStatusError, RateLimitError
 
 from ..mcp_client.capability_router import MCPCapabilityRouter
 from ..mcp_client.client_manager import MCPClientManager
+from ..testing.core.test_models import ToolCall
 from .models import (
     AgentConfig,
     ChatMessage,
@@ -278,8 +281,6 @@ class ClaudeAgent:
                 )
 
                 # Create ToolCall objects directly from our execution
-                from ..testing.core.test_models import ToolCall
-
                 server_name = (
                     self.config.mcp_servers[0].name
                     if self.config.mcp_servers
@@ -384,6 +385,8 @@ class ClaudeAgent:
 
                     # Use the continued response as our final response
                     full_response = self._extract_text_from_response(continued_response)
+                    if not full_response or full_response.strip() == "":
+                        full_response = "I've completed the tool execution but encountered an issue formulating a response."
                 else:
                     pass
 
@@ -422,7 +425,17 @@ class ClaudeAgent:
         for block in response.content:
             if block.type == "text":
                 text_parts.append(block.text)
-        return "".join(text_parts)
+
+        result = "".join(text_parts).strip()
+
+        if not result:
+            has_tool_use = any(block.type == "tool_use" for block in response.content)
+            if has_tool_use:
+                return "[Processing tools...]"
+            else:
+                return "I apologize, I encountered an issue generating a response."
+
+        return result
 
     def _extract_tool_result_content(
         self, result: dict[str, Any]
@@ -454,8 +467,6 @@ class ClaudeAgent:
         """Parse resource read requests from assistant text"""
         resource_requests = []
         # Example pattern: "[[read:resource_uri]]"
-        import re
-
         pattern = r"\[\[read:(.*?)\]\]"
         matches = re.findall(pattern, text)
         for uri in matches:
@@ -466,16 +477,12 @@ class ClaudeAgent:
         """Parse prompt get requests from assistant text"""
         prompt_requests = []
         # Example pattern: "[[prompt:prompt_name|args]]"
-        import re
-
         pattern = r"\[\[prompt:(.*?)(?:\|(.*?))?\]\]"
         matches = re.findall(pattern, text)
         for name, args_str in matches:
             request = {"name": name}
             if args_str:
                 try:
-                    import json
-
                     request["arguments"] = json.loads(args_str)
                 except json.JSONDecodeError:
                     pass
