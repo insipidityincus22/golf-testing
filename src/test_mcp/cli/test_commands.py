@@ -86,51 +86,15 @@ def create_run_command():
             # Extract actual success status from results dict
             if isinstance(results, dict):
                 success = results.get("overall_success", False)
-                successful_tests = results.get("successful_tests", 0)
-                total_tests = results.get("total_tests", 0)
             else:
                 # Fallback for boolean return (shouldn't happen but safety check)
                 success = bool(results)
-                successful_tests = 0
-                total_tests = 0
 
+            # Exit with appropriate status code (summary already printed in execute_test_cases)
+            trigger_post_command_hooks(ctx)
             if success:
-                console.print_success("All tests completed successfully!")
-                # Add post-command hook before exit
-                trigger_post_command_hooks(ctx)
                 sys.exit(0)
             else:
-                # Show detailed failure information
-                console.print_error(
-                    f"Test run failed: {successful_tests}/{total_tests} tests passed"
-                )
-
-                if isinstance(results, dict) and "test_results" in results:
-                    console.print("\n[bold red]Failed Tests:[/bold red]")
-                    failed_count = 0
-                    for result in results["test_results"]:
-                        if not result.get("success", True):  # Show failed tests
-                            failed_count += 1
-                            test_id = result.get("test_id", "unknown")
-                            error_msg = result.get(
-                                "error", result.get("message", "Unknown error")
-                            )
-
-                            # Clean up and shorten error messages
-                            if len(error_msg) > 100:
-                                error_msg = error_msg[:100] + "..."
-
-                            console.print(f"  ❌ [red]{test_id}[/red]: {error_msg}")
-
-                    if failed_count == 0:
-                        console.print(
-                            "  [yellow]No specific test failures found - check test execution logs[/yellow]"
-                        )
-
-                console.print(
-                    "\n[dim]Use --verbose flag for more detailed output[/dim]"
-                )
-                trigger_post_command_hooks(ctx)
                 sys.exit(1)
 
         except Exception as e:

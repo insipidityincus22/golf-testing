@@ -140,6 +140,16 @@ def write_test_results_with_location(
     run_file = runs_dir / f"{filename_prefix}.json"
     safe_json_dump(test_run_data, run_file, "writing test results")
 
+    # Generate markdown report alongside JSON
+    try:
+        from .markdown_report import generate_markdown_report
+
+        markdown_file = runs_dir / f"{filename_prefix}.md"
+        generate_markdown_report(test_run_data, markdown_file)
+    except Exception as e:
+        # Don't fail the entire test run if markdown generation fails
+        click.echo(f"Warning: Could not generate markdown report: {e}", err=True)
+
     # Return run_file and None for eval_file to maintain backward compatibility
     return run_file, None
 
@@ -178,6 +188,16 @@ def write_test_results(run_id: str, test_run, evaluations, summary):
     # Write main test run results (now includes evaluations and summary)
     run_file = runs_dir / f"{filename_prefix}.json"
     safe_json_dump(test_run_data, run_file, "writing test results")
+
+    # Generate markdown report alongside JSON
+    try:
+        from .markdown_report import generate_markdown_report
+
+        markdown_file = runs_dir / f"{filename_prefix}.md"
+        generate_markdown_report(test_run_data, markdown_file)
+    except Exception as e:
+        # Don't fail the entire test run if markdown generation fails
+        click.echo(f"Warning: Could not generate markdown report: {e}", err=True)
 
     # Return run_file, None, None to maintain backward compatibility
     return run_file, None, None

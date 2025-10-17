@@ -426,27 +426,29 @@ async def execute_test_cases(
                 )
 
     # Show final summary after live display ends
-    if verbose or successful_tests < len(test_cases):
-        console.print("\n[bold]Test Execution Summary:[/bold]")
-        console.print(f"  Total tests: {len(test_cases)}")
-        console.print(f"  Passed: [green]{successful_tests}[/green]")
-        console.print(f"  Failed: [red]{len(test_cases) - successful_tests}[/red]")
+    execution_time = time.time() - start_time
+    pass_rate = (successful_tests / len(test_cases) * 100) if test_cases else 0.0
 
-        # Show failed tests with details
-        failed_tests = [r for r in results if not r.get("success", True)]
-        if failed_tests:
-            console.print("\n[bold red]Failure Details:[/bold red]")
-            for result in failed_tests:
-                test_id = result.get("test_id", "unknown")
-                error_msg = result.get("error", result.get("message", "Unknown error"))
-                console.print(f"  ❌ {test_id}: {error_msg}")
+    console.print("\n[bold]Test Execution Summary:[/bold]")
+    console.print(f"Suite: {suite_config.name}")
+    console.print(f"Server: {server_config.name}")
+    console.print(f"Total Tests: {len(test_cases)}")
+    console.print(f"Passed: {successful_tests} ({pass_rate:.1f}%)")
+    console.print(f"Failed: {len(test_cases) - successful_tests}")
+    console.print(f"Duration: {execution_time:.2f}s")
+
+    # Show failed tests with details (only once)
+    failed_tests = [r for r in results if not r.get("success", True)]
+    if failed_tests:
+        console.print("\n[bold red]Failed Tests:[/bold red]")
+        for result in failed_tests:
+            test_id = result.get("test_id", "unknown")
+            error_msg = result.get("error", result.get("message", "Unknown error"))
+            console.print(f"  ❌ {test_id}: {error_msg}")
 
     # ========== NEW RESULT SAVING LOGIC ==========
     # Generate unique run ID
     run_id = str(uuid.uuid4())
-
-    # Calculate execution time
-    execution_time = time.time() - start_time
 
     # Create test_run data structure for persistence
     test_run = {
@@ -490,8 +492,14 @@ async def execute_test_cases(
             use_global_dir,  # Empty evaluations list for now
         )
 
-        console.print(f"    Test results: {run_file}")
-        # Note: eval_file will be None since evaluations is empty
+        # Print output files
+        console.print(f"\n[bold]Output Files:[/bold]")
+        console.print(f"  JSON: {run_file}")
+
+        # Derive markdown filename from JSON filename
+        md_file = run_file.with_suffix(".md")
+        if md_file.exists():
+            console.print(f"  MD: {md_file}")
 
     except Exception as e:
         console.print(
@@ -1285,9 +1293,17 @@ async def execute_standard_test_flow(
         run_id, test_run, evaluations, summary, use_global_dir
     )
 
-    console.print(f"    Test results: {run_file}")
+    # Print output files
+    console.print(f"\n[bold]Output Files:[/bold]")
+    console.print(f"  JSON: {run_file}")
+
+    # Derive markdown filename from JSON filename
+    md_file = run_file.with_suffix(".md")
+    if md_file.exists():
+        console.print(f"  MD: {md_file}")
+
     if eval_file:
-        console.print(f"    Evaluations: {eval_file}")
+        console.print(f"  Evaluations: {eval_file}")
 
     # Return success status
     return successful_tests == len(suite_config.test_cases)
