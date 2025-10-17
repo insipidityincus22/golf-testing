@@ -384,6 +384,8 @@ class ClaudeAgent:
 
                     # Use the continued response as our final response
                     full_response = self._extract_text_from_response(continued_response)
+                    if not full_response or full_response.strip() == "":
+                        full_response = "I've completed the tool execution but encountered an issue formulating a response."
                 else:
                     pass
 
@@ -422,7 +424,17 @@ class ClaudeAgent:
         for block in response.content:
             if block.type == "text":
                 text_parts.append(block.text)
-        return "".join(text_parts)
+
+        result = "".join(text_parts).strip()
+
+        if not result:
+            has_tool_use = any(block.type == "tool_use" for block in response.content)
+            if has_tool_use:
+                return "[Processing tools...]"
+            else:
+                return "I apologize, I encountered an issue generating a response."
+
+        return result
 
     def _extract_tool_result_content(
         self, result: dict[str, Any]

@@ -34,6 +34,20 @@ from ..utils.rate_limiter import RateLimiter
 from .utils import handle_execution_errors, validate_api_keys
 
 
+def _print_output_files(run_file, eval_file=None) -> None:
+    """Print output file paths in consistent format"""
+    console = get_console()
+    console.print("\n[bold]Output Files:[/bold]")
+    console.print(f"  JSON: {run_file}")
+
+    md_file = run_file.with_suffix(".md")
+    if md_file.exists():
+        console.print(f"  MD: {md_file}")
+
+    if eval_file:
+        console.print(f"  Evaluations: {eval_file}")
+
+
 class TestRunConfiguration(BaseModel):
     """Type-safe test run configuration"""
 
@@ -492,14 +506,7 @@ async def execute_test_cases(
             use_global_dir,  # Empty evaluations list for now
         )
 
-        # Print output files
-        console.print(f"\n[bold]Output Files:[/bold]")
-        console.print(f"  JSON: {run_file}")
-
-        # Derive markdown filename from JSON filename
-        md_file = run_file.with_suffix(".md")
-        if md_file.exists():
-            console.print(f"  MD: {md_file}")
+        _print_output_files(run_file)
 
     except Exception as e:
         console.print(
@@ -1293,17 +1300,7 @@ async def execute_standard_test_flow(
         run_id, test_run, evaluations, summary, use_global_dir
     )
 
-    # Print output files
-    console.print(f"\n[bold]Output Files:[/bold]")
-    console.print(f"  JSON: {run_file}")
-
-    # Derive markdown filename from JSON filename
-    md_file = run_file.with_suffix(".md")
-    if md_file.exists():
-        console.print(f"  MD: {md_file}")
-
-    if eval_file:
-        console.print(f"  Evaluations: {eval_file}")
+    _print_output_files(run_file, eval_file)
 
     # Return success status
     return successful_tests == len(suite_config.test_cases)

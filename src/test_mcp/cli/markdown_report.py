@@ -196,7 +196,8 @@ def _generate_conversation_details(conv: dict) -> list[str]:
 
             if tool_calls:
                 for tool_call in tool_calls:
-                    tool_name = tool_call.get("name", "Unknown")
+                    # ToolCall model uses 'tool_name' field, not 'name'
+                    tool_name = tool_call.get("tool_name", tool_call.get("name", "Unknown"))
                     lines.append(f"  - 🔧 Called tool: `{tool_name}`")
 
             lines.append("")
