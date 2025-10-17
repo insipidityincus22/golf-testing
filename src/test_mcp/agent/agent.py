@@ -1,4 +1,6 @@
 import asyncio
+import json
+import re
 import time
 import uuid
 from typing import Any
@@ -8,6 +10,7 @@ from anthropic import APIStatusError, RateLimitError
 
 from ..mcp_client.capability_router import MCPCapabilityRouter
 from ..mcp_client.client_manager import MCPClientManager
+from ..testing.core.test_models import ToolCall
 from .models import (
     AgentConfig,
     ChatMessage,
@@ -278,8 +281,6 @@ class ClaudeAgent:
                 )
 
                 # Create ToolCall objects directly from our execution
-                from ..testing.core.test_models import ToolCall
-
                 server_name = (
                     self.config.mcp_servers[0].name
                     if self.config.mcp_servers
@@ -466,8 +467,6 @@ class ClaudeAgent:
         """Parse resource read requests from assistant text"""
         resource_requests = []
         # Example pattern: "[[read:resource_uri]]"
-        import re
-
         pattern = r"\[\[read:(.*?)\]\]"
         matches = re.findall(pattern, text)
         for uri in matches:
@@ -478,16 +477,12 @@ class ClaudeAgent:
         """Parse prompt get requests from assistant text"""
         prompt_requests = []
         # Example pattern: "[[prompt:prompt_name|args]]"
-        import re
-
         pattern = r"\[\[prompt:(.*?)(?:\|(.*?))?\]\]"
         matches = re.findall(pattern, text)
         for name, args_str in matches:
             request = {"name": name}
             if args_str:
                 try:
-                    import json
-
                     request["arguments"] = json.loads(args_str)
                 except json.JSONDecodeError:
                     pass

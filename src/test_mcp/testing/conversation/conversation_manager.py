@@ -2,6 +2,7 @@ import logging
 import time
 import uuid
 from datetime import datetime
+from difflib import SequenceMatcher
 
 from ...agent.agent import ClaudeAgent
 from ...agent.config import load_agent_config
@@ -99,8 +100,6 @@ class ConversationManager:
         ][-window_size:]
 
         # Check for highly similar consecutive messages
-        from difflib import SequenceMatcher
-
         if len(agent_messages) >= window_size:
             similarities = []
             for i in range(len(agent_messages) - 1):
@@ -168,8 +167,6 @@ class ConversationManager:
                     turn_duration = time.time() - turn_start_time
 
                     # Get tool calls directly from agent's stored results (already in ToolCall format)
-                    from ..core.test_models import ToolCall
-
                     tool_call_dicts = agent.get_recent_tool_results()
                     tool_calls = [
                         ToolCall(**call_dict) for call_dict in tool_call_dicts

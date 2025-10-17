@@ -7,15 +7,19 @@ import asyncio
 import sys
 import traceback
 from datetime import datetime
+from enum import Enum
+from pathlib import Path
 
 import click
 
+from ..config.config_manager import ConfigManager
 from ..shared.file_utils import (
     ensure_results_directory_structure,
     safe_json_dump,
     safe_json_load_model,
     validate_required_api_keys,
 )
+from ..testing.core.test_models import TestCase
 
 
 def serialize_nested_models(obj):
@@ -28,8 +32,6 @@ def serialize_nested_models(obj):
     Returns:
         JSON-serializable version of the object with all Pydantic models converted to dicts
     """
-    from enum import Enum
-
     if hasattr(obj, "model_dump"):
         # This is a Pydantic model - convert it
         return serialize_nested_models(obj.model_dump())
@@ -102,8 +104,6 @@ def load_json_file(file_path: str, model_class):
 
 def ensure_results_directory():
     """Create XDG-compliant test results directory structure"""
-    from ..config.config_manager import ConfigManager
-
     config_manager = ConfigManager()
     system_paths = config_manager.paths.get_system_paths()
     results_dir = system_paths["data_dir"] / "results"
@@ -113,8 +113,6 @@ def ensure_results_directory():
 
 def ensure_local_results_directory():
     """Create local test results directory structure in current working directory"""
-    from pathlib import Path
-
     results_dir = Path("./test_results")
     return ensure_results_directory_structure(results_dir)
 
@@ -122,7 +120,7 @@ def ensure_local_results_directory():
 def _generate_markdown_report_safe(test_run_data: dict, json_file) -> None:
     """Generate markdown report alongside JSON, failing gracefully"""
     try:
-        from .markdown_report import generate_markdown_report
+        from .markdown_report import generate_markdown_report  # noqa: F401 - imported here to avoid circular dependency
 
         markdown_file = json_file.with_suffix(".md")
         generate_markdown_report(test_run_data, markdown_file)
@@ -164,8 +162,6 @@ def write_test_results_with_location(
 
 def convert_test_case_definition_to_test_case(test_case_def, server_name: str):
     """Convert TestCaseDefinition from JSON to TestCase for ConversationManager"""
-    from ..testing.core.test_models import TestCase
-
     return TestCase(
         test_id=test_case_def.test_id,
         user_message=test_case_def.user_message,

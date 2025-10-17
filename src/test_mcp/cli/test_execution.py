@@ -7,6 +7,7 @@ import asyncio
 import os
 import sys
 import time
+import traceback
 import uuid
 from datetime import datetime
 from typing import Any
@@ -22,16 +23,28 @@ from ..models.compliance import ComplianceTestSuite
 from ..models.conversational import ConversationTestSuite
 from ..models.factory import TestSuiteType
 from ..models.security import SecurityTestSuite
+from ..providers.openai_provider import OpenAIProvider
 from ..providers.provider_interface import AnthropicProvider, ProviderInterface
+from ..security.security_tester import MCPSecurityTester
 from ..shared.console_shared import get_console
 from ..shared.progress_tracker import ProgressTracker
+from ..testing.compliance.mcp_compliance_tester import MCPComplianceTester
 from ..testing.conversation.conversation_judge import ConversationJudge
 from ..testing.conversation.conversation_manager import ConversationManager
-from ..testing.conversation.conversation_models import ConversationConfig
+from ..testing.conversation.conversation_models import (
+    ConversationConfig,
+    ConversationResult,
+    ConversationStatus,
+    ConversationTurn,
+)
 from ..testing.core.test_models import TestCase, TestRunSummary
 from ..utils.performance_monitor import SuiteExecutionMetrics, TestExecutionMetrics
 from ..utils.rate_limiter import RateLimiter
-from .utils import handle_execution_errors, validate_api_keys
+from .utils import (
+    handle_execution_errors,
+    validate_api_keys,
+    write_test_results_with_location,
+)
 
 
 def _print_output_files(run_file, eval_file=None) -> None:
@@ -179,11 +192,6 @@ async def execute_test_cases(
     use_global_dir: bool = False,
 ) -> dict:
     """Execute test cases with live progress updates"""
-    from rich.live import Live
-
-    from ..shared.progress_tracker import ProgressTracker
-    from ..testing.core.test_models import TestCase
-
     # Track execution time
     start_time = time.time()
 
@@ -206,8 +214,6 @@ async def execute_test_cases(
     )
 
     # Initialize rate limiter for API calls
-    from ..utils.rate_limiter import RateLimiter
-
     rate_limiter = RateLimiter()
 
     # Use Rich Live context for real-time updates (same pattern as enhanced progress)
@@ -484,8 +490,6 @@ async def execute_test_cases(
     }
 
     # Create TestRunSummary object
-    from ..testing.core.test_models import TestRunSummary
-
     summary = TestRunSummary(
         run_id=run_id,
         suite_name=suite_config.name,
@@ -496,8 +500,6 @@ async def execute_test_cases(
     )
 
     try:
-        from .utils import write_test_results_with_location
-
         run_file, _eval_file = write_test_results_with_location(
             run_id,
             test_run,
@@ -540,8 +542,6 @@ async def run_single_test_case(
     rate_limiter=None,
 ) -> dict:
     """Execute a single test case using real test engines"""
-    from ..shared.progress_tracker import ProgressTracker
-
     # Create progress tracker for this single test
     progress_tracker = ProgressTracker(total_tests=1, parallelism=1)
     test_id = test_case.test_id
@@ -702,8 +702,6 @@ async def run_security_tests(
         console.print(f"Include penetration tests: {suite.include_penetration_tests}")
 
     try:
-        from ..security.security_tester import MCPSecurityTester
-
         # Use suite.auth_required, suite.include_penetration_tests, etc.
         security_tester = MCPSecurityTester(
             server_config,
@@ -743,8 +741,6 @@ async def run_security_tests(
     except Exception as e:
         console.print(f"[red]Security testing failed: {e}[/red]")
         if verbose:
-            import traceback
-
             console.print(f"[red]{traceback.format_exc()}[/red]")
         return False
 
@@ -753,10 +749,6 @@ async def run_compliance_tests(
     suite: ComplianceTestSuite, server_config: dict, verbose: bool = False
 ):
     """Execute compliance tests using typed suite configuration"""
-
-    from ..shared.progress_tracker import ProgressTracker
-    from ..testing.compliance.mcp_compliance_tester import MCPComplianceTester
-
     console = get_console()
 
     try:
@@ -836,8 +828,6 @@ async def run_compliance_tests(
     except Exception as e:
         console.print(f"[red]Compliance testing failed: {e}[/red]")
         if verbose:
-            import traceback
-
             console.print(f"[red]{traceback.format_exc()}[/red]")
         return False
 
@@ -897,7 +887,7 @@ def get_multi_provider_config_from_env(
         elif provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
             if api_key:
-                provider_configs["openai"] = {"api_key": api_key, "model": "gpt-4"}
+                provider_configs["openai"] = {"api_key": api_key, "model": "gpt-4o"}
         elif provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             if api_key:
@@ -951,8 +941,6 @@ async def execute_test_with_provider(
     if provider_name == "anthropic":
         provider = AnthropicProvider(config)
     elif provider_name == "openai":
-        from ..providers.openai_provider import OpenAIProvider
-
         provider = OpenAIProvider(config)
     elif provider_name == "gemini":
         # Import gemini provider when available
@@ -1040,12 +1028,6 @@ async def run_conversation_with_provider(
         duration = end_time - start_time
 
         # Create proper ConversationResult object for judge evaluation
-        from ..testing.conversation.conversation_models import (
-            ConversationResult,
-            ConversationStatus,
-            ConversationTurn,
-        )
-
         # Convert TestCaseDefinition to TestCase for compatibility
         test_case = TestCase(
             test_id=test_case_def.test_id,
@@ -1226,8 +1208,6 @@ async def execute_standard_test_flow(
     except Exception as e:
         console.print(f"Critical error during test execution: {e!s}")
         if verbose:
-            import traceback
-
             console.print(traceback.format_exc())
         return False
 
@@ -1358,8 +1338,6 @@ def run_with_mcpt_inference(
                 f"[red]❌ {test_type.capitalize()} test execution failed: {e!s}[/red]"
             )
             if verbose:
-                import traceback
-
                 console.print(traceback.format_exc())
             sys.exit(1)
 
@@ -1393,8 +1371,6 @@ async def run_tests_with_enhanced_progress(
 
     # Create rate_limiter if not provided
     if rate_limiter is None:
-        from ..utils.rate_limiter import RateLimiter
-
         rate_limiter = RateLimiter()
 
     success_count = 0
@@ -1617,8 +1593,6 @@ async def execute_compliance_test_real(
     )
 
     try:
-        from ..testing.compliance.mcp_compliance_tester import MCPComplianceTester
-
         # Handle both dict and MCPServerConfig objects
         server_model = (
             server_config
@@ -1739,8 +1713,6 @@ async def execute_security_test_real(
     progress_tracker.update_simple_progress(test_id, "Initializing security tester...")
 
     try:
-        from ..security.security_tester import MCPSecurityTester
-
         # Handle both dict and MCPServerConfig objects
         server_model = (
             server_config
