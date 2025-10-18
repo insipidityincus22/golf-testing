@@ -118,6 +118,16 @@ Respond with ONLY the JSON object, no additional text."""
     ) -> UserSimulatorResponse:
         """Generate a realistic user response to the agent's message"""
 
+        # Handle empty agent responses early
+        if not agent_response or agent_response.strip() == "":
+            return UserSimulatorResponse(
+                response_type="error",
+                user_message=None,
+                reasoning="Agent provided empty response",
+                confidence=1.0,
+                completion_reason="Agent returned empty message - API error",
+            )
+
         try:
             # Create prompt for user simulation
             prompt = self._create_user_simulation_prompt(

@@ -30,7 +30,6 @@ def validate_consistency() -> bool:
     all_colors = {}
     violations = []
 
-
     for filename in os.listdir(cli_dir):
         if filename.endswith(".py"):
             filepath = os.path.join(cli_dir, filename)

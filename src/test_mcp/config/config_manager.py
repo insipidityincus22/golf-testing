@@ -141,7 +141,7 @@ class ConfigManager:
                 "name": "${SUITE_NAME:-MCP Compliance Test Suite}",
                 "description": "${SUITE_DESCRIPTION:-MCP protocol compliance testing}",
                 "suite_type": "compliance",
-                "parallelism": 3,
+                "parallelism": 1,
                 "test_cases": [
                     {
                         "test_id": "protocol_handshake",
@@ -174,7 +174,7 @@ class ConfigManager:
                 "name": "${SUITE_NAME:-MCP Security Test Suite}",
                 "description": "${SUITE_DESCRIPTION:-MCP security and authentication testing}",
                 "suite_type": "security",
-                "parallelism": 2,
+                "parallelism": 1,
                 "test_cases": [
                     {
                         "test_id": "auth_validation",
@@ -322,7 +322,7 @@ class ConfigManager:
             ],
             auth_required=False,
             strict_mode=True,
-            parallelism=2,  # Protocol tests are lightweight
+            parallelism=1,  # OAuth-safe for compliance tests with auth
         )
 
     def create_security_template(self) -> SecurityTestSuite:
@@ -339,7 +339,7 @@ class ConfigManager:
                 ),
                 SecurityTestConfig(
                     test_id="rate_limiting",
-                    auth_method="token",
+                    auth_method="oauth",
                     rate_limit_threshold=100,
                     vulnerability_checks=["rate_limit"],
                 ),
@@ -351,7 +351,7 @@ class ConfigManager:
             ],
             auth_required=True,
             include_penetration_tests=False,
-            parallelism=2,  # Security tests are resource-intensive
+            parallelism=1,  # OAuth requires sequential execution
         )
 
     def create_conversational_template(self) -> ConversationTestSuite:
@@ -378,7 +378,7 @@ class ConfigManager:
             auth_required=False,
             user_patience_level="medium",
             conversation_style="natural",
-            parallelism=3,  # Conversation tests moderate concurrency
+            parallelism=1,  # Sequential execution for conversation context
         )
 
     def get_server_by_id(self, server_id: str) -> MCPServerConfig:

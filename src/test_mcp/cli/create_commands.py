@@ -585,8 +585,6 @@ def preview_template_test_cases(console, template_suite) -> None:
             # SecurityTestConfig
             console.print(f"   Auth Method: {test_case.auth_method}")
             console.print(f"   Checks: {', '.join(test_case.vulnerability_checks)}")
-            if hasattr(test_case, "rate_limit_threshold"):
-                console.print(f"   Rate Limit: {test_case.rate_limit_threshold}")
 
         console.print()
 
@@ -803,6 +801,10 @@ def create_conversational_suite_interactive(
 
     # Show template preview
     preview_template_test_cases(console, template)
+
+    console.print(
+        "[dim]💡 Tip: For conversational test cases, use [cyan]mcp-t generate[/cyan] instead to automatically generate test cases.[/dim]\n"
+    )
 
     # Show customization options
     customization_choice = show_customization_menu(console)

@@ -7,15 +7,19 @@ import asyncio
 import sys
 import traceback
 from datetime import datetime
+from enum import Enum
+from pathlib import Path
 
 import click
 
+from ..config.config_manager import ConfigManager
 from ..shared.file_utils import (
     ensure_results_directory_structure,
     safe_json_dump,
     safe_json_load_model,
     validate_required_api_keys,
 )
+from ..testing.core.test_models import TestCase
 
 
 def serialize_nested_models(obj):
@@ -31,6 +35,9 @@ def serialize_nested_models(obj):
     if hasattr(obj, "model_dump"):
         # This is a Pydantic model - convert it
         return serialize_nested_models(obj.model_dump())
+    elif isinstance(obj, Enum):
+        # Convert enum to its value
+        return obj.value
     elif isinstance(obj, dict):
         # Recursively process dictionary values
         return {key: serialize_nested_models(value) for key, value in obj.items()}
@@ -97,8 +104,6 @@ def load_json_file(file_path: str, model_class):
 
 def ensure_results_directory():
     """Create XDG-compliant test results directory structure"""
-    from ..config.config_manager import ConfigManager
-
     config_manager = ConfigManager()
     system_paths = config_manager.paths.get_system_paths()
     results_dir = system_paths["data_dir"] / "results"
@@ -108,10 +113,19 @@ def ensure_results_directory():
 
 def ensure_local_results_directory():
     """Create local test results directory structure in current working directory"""
-    from pathlib import Path
-
     results_dir = Path("./test_results")
     return ensure_results_directory_structure(results_dir)
+
+
+def _generate_markdown_report_safe(test_run_data: dict, json_file) -> None:
+    """Generate markdown report alongside JSON, failing gracefully"""
+    try:
+        from .markdown_report import generate_markdown_report  # noqa: F401 - imported here to avoid circular dependency
+
+        markdown_file = json_file.with_suffix(".md")
+        generate_markdown_report(test_run_data, markdown_file)
+    except Exception as e:
+        click.echo(f"Warning: Could not generate markdown report: {e}", err=True)
 
 
 def write_test_results_with_location(
@@ -140,14 +154,14 @@ def write_test_results_with_location(
     run_file = runs_dir / f"{filename_prefix}.json"
     safe_json_dump(test_run_data, run_file, "writing test results")
 
+    _generate_markdown_report_safe(test_run_data, run_file)
+
     # Return run_file and None for eval_file to maintain backward compatibility
     return run_file, None
 
 
 def convert_test_case_definition_to_test_case(test_case_def, server_name: str):
     """Convert TestCaseDefinition from JSON to TestCase for ConversationManager"""
-    from ..testing.core.test_models import TestCase
-
     return TestCase(
         test_id=test_case_def.test_id,
         user_message=test_case_def.user_message,
@@ -179,11 +193,13 @@ def write_test_results(run_id: str, test_run, evaluations, summary):
     run_file = runs_dir / f"{filename_prefix}.json"
     safe_json_dump(test_run_data, run_file, "writing test results")
 
+    _generate_markdown_report_safe(test_run_data, run_file)
+
     # Return run_file, None, None to maintain backward compatibility
     return run_file, None, None
 
 
-def handle_connection_error(error: Exception, server_url: str = None) -> str:
+def handle_connection_error(error: Exception, server_url: str | None = None) -> str:
     """Convert connection errors to user-friendly messages"""
     error_msg = str(error).lower()
 
@@ -224,7 +240,10 @@ def handle_async_error(error: Exception, verbose: bool = False) -> str:
 
 
 def safe_run_async(
-    coro, error_context: str = None, server_url: str = None, verbose: bool = False
+    coro,
+    error_context: str | None = None,
+    server_url: str | None = None,
+    verbose: bool = False,
 ):
     """Safely run an async coroutine with proper error handling"""
     try:

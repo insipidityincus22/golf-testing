@@ -145,7 +145,7 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
                 {"role": "user", "content": prompt},
             ]
 
-            evaluation_data, raw_response = (
+            evaluation_data, _raw_response = (
                 self.openai_client.create_completion_with_json_parsing(
                     messages=messages,
                     max_tokens=1200,  # More tokens for conversation analysis

@@ -7,6 +7,7 @@ import asyncio
 import os
 import sys
 import time
+import traceback
 import uuid
 from datetime import datetime
 from typing import Any
@@ -22,16 +23,42 @@ from ..models.compliance import ComplianceTestSuite
 from ..models.conversational import ConversationTestSuite
 from ..models.factory import TestSuiteType
 from ..models.security import SecurityTestSuite
+from ..providers.openai_provider import OpenAIProvider
 from ..providers.provider_interface import AnthropicProvider, ProviderInterface
+from ..security.security_tester import MCPSecurityTester
 from ..shared.console_shared import get_console
 from ..shared.progress_tracker import ProgressTracker
+from ..testing.compliance.mcp_compliance_tester import MCPComplianceTester
 from ..testing.conversation.conversation_judge import ConversationJudge
 from ..testing.conversation.conversation_manager import ConversationManager
-from ..testing.conversation.conversation_models import ConversationConfig
+from ..testing.conversation.conversation_models import (
+    ConversationConfig,
+    ConversationResult,
+    ConversationStatus,
+    ConversationTurn,
+)
 from ..testing.core.test_models import TestCase, TestRunSummary
 from ..utils.performance_monitor import SuiteExecutionMetrics, TestExecutionMetrics
 from ..utils.rate_limiter import RateLimiter
-from .utils import handle_execution_errors, validate_api_keys
+from .utils import (
+    handle_execution_errors,
+    validate_api_keys,
+    write_test_results_with_location,
+)
+
+
+def _print_output_files(run_file, eval_file=None) -> None:
+    """Print output file paths in consistent format"""
+    console = get_console()
+    console.print("\n[bold]Output Files:[/bold]")
+    console.print(f"  JSON: {run_file}")
+
+    md_file = run_file.with_suffix(".md")
+    if md_file.exists():
+        console.print(f"  MD: {md_file}")
+
+    if eval_file:
+        console.print(f"  Evaluations: {eval_file}")
 
 
 class TestRunConfiguration(BaseModel):
@@ -165,11 +192,6 @@ async def execute_test_cases(
     use_global_dir: bool = False,
 ) -> dict:
     """Execute test cases with live progress updates"""
-    from rich.live import Live
-
-    from ..shared.progress_tracker import ProgressTracker
-    from ..testing.core.test_models import TestCase
-
     # Track execution time
     start_time = time.time()
 
@@ -192,8 +214,6 @@ async def execute_test_cases(
     )
 
     # Initialize rate limiter for API calls
-    from ..utils.rate_limiter import RateLimiter
-
     rate_limiter = RateLimiter()
 
     # Use Rich Live context for real-time updates (same pattern as enhanced progress)
@@ -426,27 +446,29 @@ async def execute_test_cases(
                 )
 
     # Show final summary after live display ends
-    if verbose or successful_tests < len(test_cases):
-        console.print("\n[bold]Test Execution Summary:[/bold]")
-        console.print(f"  Total tests: {len(test_cases)}")
-        console.print(f"  Passed: [green]{successful_tests}[/green]")
-        console.print(f"  Failed: [red]{len(test_cases) - successful_tests}[/red]")
+    execution_time = time.time() - start_time
+    pass_rate = (successful_tests / len(test_cases) * 100) if test_cases else 0.0
 
-        # Show failed tests with details
-        failed_tests = [r for r in results if not r.get("success", True)]
-        if failed_tests:
-            console.print("\n[bold red]Failure Details:[/bold red]")
-            for result in failed_tests:
-                test_id = result.get("test_id", "unknown")
-                error_msg = result.get("error", result.get("message", "Unknown error"))
-                console.print(f"  ❌ {test_id}: {error_msg}")
+    console.print("\n[bold]Test Execution Summary:[/bold]")
+    console.print(f"Suite: {suite_config.name}")
+    console.print(f"Server: {server_config.name}")
+    console.print(f"Total Tests: {len(test_cases)}")
+    console.print(f"Passed: {successful_tests} ({pass_rate:.1f}%)")
+    console.print(f"Failed: {len(test_cases) - successful_tests}")
+    console.print(f"Duration: {execution_time:.2f}s")
+
+    # Show failed tests with details (only once)
+    failed_tests = [r for r in results if not r.get("success", True)]
+    if failed_tests:
+        console.print("\n[bold red]Failed Tests:[/bold red]")
+        for result in failed_tests:
+            test_id = result.get("test_id", "unknown")
+            error_msg = result.get("error", result.get("message", "Unknown error"))
+            console.print(f"  ❌ {test_id}: {error_msg}")
 
     # ========== NEW RESULT SAVING LOGIC ==========
     # Generate unique run ID
     run_id = str(uuid.uuid4())
-
-    # Calculate execution time
-    execution_time = time.time() - start_time
 
     # Create test_run data structure for persistence
     test_run = {
@@ -468,8 +490,6 @@ async def execute_test_cases(
     }
 
     # Create TestRunSummary object
-    from ..testing.core.test_models import TestRunSummary
-
     summary = TestRunSummary(
         run_id=run_id,
         suite_name=suite_config.name,
@@ -480,9 +500,7 @@ async def execute_test_cases(
     )
 
     try:
-        from .utils import write_test_results_with_location
-
-        run_file, eval_file = write_test_results_with_location(
+        run_file, _eval_file = write_test_results_with_location(
             run_id,
             test_run,
             [],
@@ -490,8 +508,7 @@ async def execute_test_cases(
             use_global_dir,  # Empty evaluations list for now
         )
 
-        console.print(f"    Test results: {run_file}")
-        # Note: eval_file will be None since evaluations is empty
+        _print_output_files(run_file)
 
     except Exception as e:
         console.print(
@@ -500,8 +517,12 @@ async def execute_test_cases(
 
     # ========== END NEW LOGIC ==========
 
-    # Clean up shared OAuth token storage after test suite completes
-    SharedTokenStorage.clear_all()
+    # Use async token cleanup to prevent race conditions
+    try:
+        await SharedTokenStorage.clear_all_async()
+    except Exception as e:
+        # Log cleanup errors but don't fail the test
+        console.print(f"[yellow]⚠️  Token cleanup warning: {e}[/yellow]")
 
     # Return final results (existing format preserved)
     return {
@@ -521,8 +542,6 @@ async def run_single_test_case(
     rate_limiter=None,
 ) -> dict:
     """Execute a single test case using real test engines"""
-    from ..shared.progress_tracker import ProgressTracker
-
     # Create progress tracker for this single test
     progress_tracker = ProgressTracker(total_tests=1, parallelism=1)
     test_id = test_case.test_id
@@ -541,21 +560,21 @@ async def run_single_test_case(
         # Route to appropriate real test engine (existing pattern from enhanced progress)
         if test_type == "compliance":
             result = await execute_compliance_test_real(
-                test_case, server_config.__dict__, progress_tracker, test_id, verbose
+                test_case, server_config.model_dump(), progress_tracker, test_id, verbose
             )
         elif test_type == "security":
             result = await execute_security_test_real(
-                test_case, server_config.__dict__, progress_tracker, test_id
+                test_case, server_config.model_dump(), progress_tracker, test_id
             )
         elif test_type == "multi-provider":
             result = execute_multi_provider_test_real(
-                test_case, server_config.__dict__, progress_tracker, test_id
+                test_case, server_config.model_dump(), progress_tracker, test_id
             )
         else:
             # Default to conversation test (most common case)
             result = await execute_conversation_test_real(
                 test_case,
-                server_config.__dict__,
+                server_config.model_dump(),
                 progress_tracker,
                 test_id,
                 verbose,
@@ -683,8 +702,6 @@ async def run_security_tests(
         console.print(f"Include penetration tests: {suite.include_penetration_tests}")
 
     try:
-        from ..security.security_tester import MCPSecurityTester
-
         # Use suite.auth_required, suite.include_penetration_tests, etc.
         security_tester = MCPSecurityTester(
             server_config,
@@ -724,8 +741,6 @@ async def run_security_tests(
     except Exception as e:
         console.print(f"[red]Security testing failed: {e}[/red]")
         if verbose:
-            import traceback
-
             console.print(f"[red]{traceback.format_exc()}[/red]")
         return False
 
@@ -734,10 +749,6 @@ async def run_compliance_tests(
     suite: ComplianceTestSuite, server_config: dict, verbose: bool = False
 ):
     """Execute compliance tests using typed suite configuration"""
-
-    from ..shared.progress_tracker import ProgressTracker
-    from ..testing.compliance.mcp_compliance_tester import MCPComplianceTester
-
     console = get_console()
 
     try:
@@ -817,8 +828,6 @@ async def run_compliance_tests(
     except Exception as e:
         console.print(f"[red]Compliance testing failed: {e}[/red]")
         if verbose:
-            import traceback
-
             console.print(f"[red]{traceback.format_exc()}[/red]")
         return False
 
@@ -878,7 +887,7 @@ def get_multi_provider_config_from_env(
         elif provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
             if api_key:
-                provider_configs["openai"] = {"api_key": api_key, "model": "gpt-4"}
+                provider_configs["openai"] = {"api_key": api_key, "model": "gpt-4o"}
         elif provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             if api_key:
@@ -932,8 +941,6 @@ async def execute_test_with_provider(
     if provider_name == "anthropic":
         provider = AnthropicProvider(config)
     elif provider_name == "openai":
-        from ..providers.openai_provider import OpenAIProvider
-
         provider = OpenAIProvider(config)
     elif provider_name == "gemini":
         # Import gemini provider when available
@@ -1021,12 +1028,6 @@ async def run_conversation_with_provider(
         duration = end_time - start_time
 
         # Create proper ConversationResult object for judge evaluation
-        from ..testing.conversation.conversation_models import (
-            ConversationResult,
-            ConversationStatus,
-            ConversationTurn,
-        )
-
         # Convert TestCaseDefinition to TestCase for compatibility
         test_case = TestCase(
             test_id=test_case_def.test_id,
@@ -1150,7 +1151,7 @@ async def execute_standard_test_flow(
 
     # Build agent configuration
     console.print("Building agent configuration...")
-    anthropic_key, openai_key = validate_api_keys()
+    anthropic_key, _openai_key = validate_api_keys()
     agent_config = build_agent_config_from_server(server_config, anthropic_key)
 
     # Setup conversation configuration with suite parameters
@@ -1196,7 +1197,7 @@ async def execute_standard_test_flow(
         )
 
         # Process results and handle any execution errors
-        successful_results, error_results = handle_execution_errors(
+        _successful_results, _error_results = handle_execution_errors(
             test_results, suite_config
         )
 
@@ -1207,8 +1208,6 @@ async def execute_standard_test_flow(
     except Exception as e:
         console.print(f"Critical error during test execution: {e!s}")
         if verbose:
-            import traceback
-
             console.print(traceback.format_exc())
         return False
 
@@ -1281,9 +1280,7 @@ async def execute_standard_test_flow(
         run_id, test_run, evaluations, summary, use_global_dir
     )
 
-    console.print(f"    Test results: {run_file}")
-    if eval_file:
-        console.print(f"    Evaluations: {eval_file}")
+    _print_output_files(run_file, eval_file)
 
     # Return success status
     return successful_tests == len(suite_config.test_cases)
@@ -1341,8 +1338,6 @@ def run_with_mcpt_inference(
                 f"[red]❌ {test_type.capitalize()} test execution failed: {e!s}[/red]"
             )
             if verbose:
-                import traceback
-
                 console.print(traceback.format_exc())
             sys.exit(1)
 
@@ -1376,8 +1371,6 @@ async def run_tests_with_enhanced_progress(
 
     # Create rate_limiter if not provided
     if rate_limiter is None:
-        from ..utils.rate_limiter import RateLimiter
-
         rate_limiter = RateLimiter()
 
     success_count = 0
@@ -1471,7 +1464,7 @@ async def execute_conversation_test_real(
 
     try:
         # Validate API keys
-        anthropic_key, openai_key = validate_api_keys()
+        anthropic_key, _openai_key = validate_api_keys()
         progress_tracker.update_simple_progress(test_id, "Connecting to server...")
 
         # Build agent config from server config (handle both dict and MCPServerConfig objects)
@@ -1600,8 +1593,6 @@ async def execute_compliance_test_real(
     )
 
     try:
-        from ..testing.compliance.mcp_compliance_tester import MCPComplianceTester
-
         # Handle both dict and MCPServerConfig objects
         server_model = (
             server_config
@@ -1631,7 +1622,7 @@ async def execute_compliance_test_real(
             check_categories = test_id_to_category.get(test_case_id)
 
         # Create compliance tester with server config
-        compliance_tester = MCPComplianceTester(server_model.__dict__, progress_tracker)
+        compliance_tester = MCPComplianceTester(server_model.model_dump(), progress_tracker)
 
         progress_tracker.update_simple_progress(test_id, "Running compliance checks...")
 
@@ -1722,8 +1713,6 @@ async def execute_security_test_real(
     progress_tracker.update_simple_progress(test_id, "Initializing security tester...")
 
     try:
-        from ..security.security_tester import MCPSecurityTester
-
         # Handle both dict and MCPServerConfig objects
         server_model = (
             server_config
@@ -1733,7 +1722,7 @@ async def execute_security_test_real(
 
         # Create security tester with server config dict
         security_tester = MCPSecurityTester(
-            server_model.__dict__,
+            server_model.model_dump(),
             auth_required=getattr(server_model, "auth_required", False),
             include_penetration_tests=True,
         )
