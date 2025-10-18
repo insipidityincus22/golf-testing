@@ -560,21 +560,21 @@ async def run_single_test_case(
         # Route to appropriate real test engine (existing pattern from enhanced progress)
         if test_type == "compliance":
             result = await execute_compliance_test_real(
-                test_case, server_config.__dict__, progress_tracker, test_id, verbose
+                test_case, server_config.model_dump(), progress_tracker, test_id, verbose
             )
         elif test_type == "security":
             result = await execute_security_test_real(
-                test_case, server_config.__dict__, progress_tracker, test_id
+                test_case, server_config.model_dump(), progress_tracker, test_id
             )
         elif test_type == "multi-provider":
             result = execute_multi_provider_test_real(
-                test_case, server_config.__dict__, progress_tracker, test_id
+                test_case, server_config.model_dump(), progress_tracker, test_id
             )
         else:
             # Default to conversation test (most common case)
             result = await execute_conversation_test_real(
                 test_case,
-                server_config.__dict__,
+                server_config.model_dump(),
                 progress_tracker,
                 test_id,
                 verbose,
@@ -1622,7 +1622,7 @@ async def execute_compliance_test_real(
             check_categories = test_id_to_category.get(test_case_id)
 
         # Create compliance tester with server config
-        compliance_tester = MCPComplianceTester(server_model.__dict__, progress_tracker)
+        compliance_tester = MCPComplianceTester(server_model.model_dump(), progress_tracker)
 
         progress_tracker.update_simple_progress(test_id, "Running compliance checks...")
 
@@ -1722,7 +1722,7 @@ async def execute_security_test_real(
 
         # Create security tester with server config dict
         security_tester = MCPSecurityTester(
-            server_model.__dict__,
+            server_model.model_dump(),
             auth_required=getattr(server_model, "auth_required", False),
             include_penetration_tests=True,
         )
